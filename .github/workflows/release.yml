@@ -1,0 +1,69 @@
+name: Build and release
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a master push: every successful push gets its own release.
+concurrency:
+  group: build-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build and smoke-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lints
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --locked
+      - name: Build the single executable
+        run: cargo build --locked --release
+      - name: Verify release executable
+        run: |
+          target/release/tidal-forces --version
+          ldd target/release/tidal-forces
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a target/release/tidal-forces --smoke-ui
+      - name: Package binary and checksum
+        run: |
+          mkdir dist
+          cp target/release/tidal-forces dist/tidal-forces-linux-x86_64
+          cd dist
+          sha256sum tidal-forces-linux-x86_64 > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tidal-forces-linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish a release for this master push
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="master-${GITHUB_SHA:0:12}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" \
+              --title "Tidal Forces · ${GITHUB_SHA:0:12}" \
+              --notes "Automated Linux x86_64 build from master (${GITHUB_SHA}). Download the executable, make it executable, then run it with --install to register the desktop app. Requires a TIDAL subscription. See README for runtime requirements and playback limitations."
+          fi
+          gh release upload "$tag" dist/* --clobber
