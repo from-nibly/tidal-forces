@@ -26,7 +26,7 @@ fn step(method: &'static str, path: &'static str, body: Value) -> Step {
     }
 }
 fn metadata() -> Value {
-    json!({"uuid":"test-list", "title":"Test", "numberOfTracks":3,"numberOfVideos":1,"creator":{"id":7}})
+    json!({"uuid":"test-list", "title":"Test", "type":"USER", "numberOfTracks":3,"numberOfVideos":1,"creator":{"id":7}})
 }
 fn track(id: u64) -> Value {
     json!({"type":"track","item":{"id":id,"title":"Synthetic metadata"}})
@@ -227,6 +227,29 @@ async fn refuses_stale_snapshots_wrong_tracks_and_foreign_playlists() {
 }
 
 #[tokio::test]
+async fn ownerless_and_artist_playlists_are_browsable_but_read_only() {
+    for (kind, creator) in [("EDITORIAL", Value::Null), ("ARTIST", json!({"id":7}))] {
+        let mut info = metadata();
+        info["type"] = json!(kind);
+        info["creator"] = creator;
+        let (mut api, server) = mock(vec![
+            step("GET", "/v1/playlists/test-list", info.clone()),
+            step(
+                "GET",
+                "/v1/playlists/test-list/items",
+                json!({"totalNumberOfItems":1,"items":[track(9)]}),
+            ),
+            step("GET", "/v1/playlists/test-list", info),
+        ]);
+        let page = api.playlist_page("test-list", 0, None).await.unwrap();
+        assert!(!page.editable);
+        assert_eq!(page.rows.len(), 1);
+        assert!(api.add_to_playlist("test-list", 9).await.is_err());
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn reports_duplicates_and_conflicts_without_retrying_writes() {
     let (mut api, server) = mock(vec![
         step("GET", "/v1/playlists/test-list", metadata()),
@@ -257,7 +280,7 @@ async fn reports_duplicates_and_conflicts_without_retrying_writes() {
 #[tokio::test]
 async fn owned_picker_paginates_and_rejects_cross_page_revision_changes() {
     let page: Vec<_> = (0..50)
-        .map(|i| json!({"uuid":format!("list-{i}"),"title":format!("List {i}"),"creator":{"id":7}}))
+        .map(|i| json!({"uuid":format!("list-{i}"),"title":format!("List {i}"),"type":"USER","creator":{"id":7}}))
         .collect();
     let mut second = step(
         "GET",

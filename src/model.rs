@@ -54,11 +54,14 @@ pub struct Playlist {
     #[serde(default)]
     pub number_of_videos: u64,
     #[serde(default)]
-    pub creator: PlaylistCreator,
+    pub creator: Option<PlaylistCreator>,
+    #[serde(default, rename = "type")]
+    pub kind: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct PlaylistCreator {
+    #[serde(default)]
     pub id: u64,
 }
 

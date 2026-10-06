@@ -530,9 +530,14 @@ impl Api {
     }
 
     fn owns(&self, playlist: &Playlist) -> bool {
-        self.session
-            .as_ref()
-            .is_some_and(|s| s.user_id != 0 && playlist.creator.id == s.user_id)
+        self.session.as_ref().is_some_and(|s| {
+            s.user_id != 0
+                && playlist.kind == "USER"
+                && playlist
+                    .creator
+                    .as_ref()
+                    .is_some_and(|creator| creator.id == s.user_id)
+        })
     }
 
     pub async fn owned_playlists(&mut self) -> Result<Vec<Playlist>> {
