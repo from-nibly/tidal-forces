@@ -1,3 +1,4 @@
+mod aac;
 mod api;
 mod audio;
 #[cfg(test)]
@@ -7,6 +8,7 @@ mod backend;
 mod dash;
 mod desktop;
 mod install;
+mod licenses;
 mod model;
 mod queue;
 mod store;
@@ -33,6 +35,13 @@ fn main() -> Result<()> {
             install::install()?;
             return Ok(());
         }
+        Some("--licenses") => {
+            licenses::print();
+            return Ok(());
+        }
+        Some("--export-fdk-source") => {
+            return licenses::export(args.get(1).context("Supply an output path")?);
+        }
         Some("--audio-test") => return audio::audio_test(),
         Some("--check-account") => return check_account(args.iter().any(|a| a == "--refresh")),
         Some("--verify-playback") => {
@@ -43,7 +52,7 @@ fn main() -> Result<()> {
         }
         Some("--help") => {
             println!(
-                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of lossless audio; --seek also tests pause and seek\n  --version           Show version\n\nStart without arguments to open the player."
+                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of preferred-quality audio; --seek also tests pause and seek\n  --version           Show version\n  --licenses          Show bundled codec and font license notices\n  --export-fdk-source PATH  Export the complete bundled AAC codec source\n\nStart without arguments to open the player."
             );
             return Ok(());
         }
@@ -181,7 +190,7 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                     } else {
                         backend.player.stop();
                         println!(
-                            "Verified authenticated lossless playback across segment boundaries for {seconds}s."
+                            "Verified authenticated playback across segment boundaries for {seconds}s."
                         );
                         return Ok(());
                     }
@@ -189,7 +198,7 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                 Event::Position { seconds, .. } if seeking && seconds >= 50 => {
                     backend.player.stop();
                     println!(
-                        "Verified continuous lossless playback, pause/resume, seek, and playback after seeking."
+                        "Verified continuous playback, pause/resume, seek, and playback after seeking."
                     );
                     return Ok(());
                 }

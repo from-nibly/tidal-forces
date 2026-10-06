@@ -395,25 +395,9 @@ impl Api {
                 ],
             )
             .await?;
-        if matches!(quality, "LOSSLESS" | "HI_RES_LOSSLESS") {
-            anyhow::ensure!(
-                matches!(
-                    v["audioQuality"].as_str(),
-                    Some("LOSSLESS" | "HI_RES_LOSSLESS")
-                ),
-                "TIDAL only offered {} for this track. No lossy fallback was played. Try another track, or enable lossless sign-in in Settings if using a device session.",
-                v["audioQuality"].as_str().unwrap_or("unknown quality")
-            );
-        }
-        let stream = parse_stream(&v)?;
-        if matches!(quality, "LOSSLESS" | "HI_RES_LOSSLESS") {
-            anyhow::ensure!(
-                stream.codec.eq_ignore_ascii_case("flac")
-                    || stream.codec.eq_ignore_ascii_case("alac"),
-                "TIDAL did not return a lossless codec"
-            );
-        }
-        Ok(stream)
+        // TIDAL may return a lower-quality asset when lossless isn't available.
+        // Decode that authorized stream and label its actual quality, not the request.
+        parse_stream(&v)
     }
 }
 
@@ -459,10 +443,11 @@ pub fn parse_stream(v: &Value) -> Result<Stream> {
     if v["manifestMimeType"] == "application/dash+xml" {
         let manifest = crate::dash::parse(std::str::from_utf8(&bytes)?)?;
         let sample_rate = Some(manifest.sample_rate as u64);
+        let codec = manifest.codec.label().to_owned();
         return Ok(Stream {
             source: StreamSource::Dash(manifest),
             quality,
-            codec: "FLAC".into(),
+            codec,
             sample_rate,
             bit_depth,
         });
@@ -608,6 +593,25 @@ mod tests {
         let stream = parse_stream(&json!({"manifestMimeType":"application/dash+xml","manifest":STANDARD.encode(xml),"audioQuality":"HI_RES_LOSSLESS","bitDepth":24,"sampleRate":96000})).unwrap();
         assert!(matches!(stream.source, StreamSource::Dash(_)));
         assert_eq!(stream.label(), "HI RES LOSSLESS · FLAC · 24 bit / 96 kHz");
+    }
+
+    #[test]
+    fn accepts_lossy_fallback_and_labels_the_returned_quality() {
+        for (codec, label) in [
+            ("mp4a.40.2", "AAC-LC"),
+            ("mp4a.40.5", "HE-AAC"),
+            ("mp4a.40.29", "HE-AAC v2"),
+        ] {
+            let xml = format!(
+                r#"<MPD><Period><AdaptationSet><Representation codecs="{codec}" audioSamplingRate="44100"><SegmentTemplate timescale="44100" initialization="https://audio.tidal.com/0.mp4" media="https://audio.tidal.com/$Number$.mp4"><SegmentTimeline><S d="44100"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#
+            );
+            let value = json!({"manifestMimeType":"application/dash+xml","manifest":STANDARD.encode(&xml),"audioQuality":"LOW"});
+            let stream = parse_stream(&value).unwrap();
+            assert!(matches!(stream.source, StreamSource::Dash(_)));
+            assert_eq!(stream.label(), format!("LOW · {label}"));
+            let protected = xml.replace("<AdaptationSet>", "<AdaptationSet><ContentProtection/>");
+            assert!(parse_stream(&json!({"manifestMimeType":"application/dash+xml","manifest":STANDARD.encode(protected),"audioQuality":"LOW"})).is_err());
+        }
     }
 
     #[test]

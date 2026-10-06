@@ -49,10 +49,17 @@ passes through this app. Refresh tokens retain their authentication type across
 restarts. The fixed native-client redirect requires the copy/paste step; there
 is no embedded browser or browser-cookie extraction.
 
-### Actual lossless streaming
+### Lossless preferred, with lossy fallback
 
-The lossless connection supports **unencrypted DASH FLAC** and direct BTS FLAC
-streams. Native decoding uses rodio/Symphonia. DASH initialization and media
+The default preference requests lossless from TIDAL. If a track is only available
+as AAC, it plays automatically at the quality TIDAL provides. The player reports
+the **actual** format—for example, `LOW · HE-AAC`—rather than labeling it lossless.
+Lossless tracks still play as FLAC.
+
+Supported streams include **unencrypted DASH FLAC, AAC-LC, HE-AAC, HE-AAC v2**,
+and direct BTS streams. FLAC decoding uses rodio/Symphonia; DASH AAC uses a
+statically bundled FDK AAC decoder with Symphonia demuxing. AAC decoder state is
+preserved across fragments, and seeking uses a preceding fragment as preroll. DASH initialization and media
 fragments are fetched in the background; only the current fragment and two ahead
 are retained. Playback does not wait for the whole track. Seeking selects and
 buffers the appropriate fragment and decodes to the requested sample offset on
@@ -61,17 +68,15 @@ briefly holds an additional prepared fragment; network waits do not run in the
 seek callback. The player reports TIDAL's returned codec, bit depth and sample rate. Live
 16-bit / 44.1 kHz FLAC playback and seeking have been verified with a subscription.
 
-**There is no silent lossy fallback.** If TIDAL offers only AAC/LOW for a track,
-lossless mode reports that and does not play it as “lossless.” Some tracks can
-be restricted or unavailable at the requested quality for this client/account.
-The player does not claim exclusive-mode, bit-perfect output or automatic device
-sample-rate switching; the OS mixer may resample audio.
+Some tracks can still be restricted or unavailable for this client/account.
+Fallback does not bypass TIDAL authorization or DRM. The player does not claim
+exclusive-mode, bit-perfect output or automatic device sample-rate switching;
+the OS mixer may resample audio.
 
 **Compatibility sign-in** remains available for AAC-only device authorization
-and direct BTS streams. AAC quality choices apply to that connection, not the
-PKCE lossless connection. DASH AAC, encrypted audio/DRM, and live DASH manifests
-are not supported. No subscription bypass, DRM bypass, third-party music proxies
-or external decoder processes are used.
+and direct BTS streams. High and Low AAC preferences also work with PKCE sign-in.
+Encrypted audio/DRM and live DASH manifests are not supported. No subscription
+bypass, DRM bypass, third-party music proxies or external decoder processes are used.
 
 ## Browse and listen
 
@@ -166,15 +171,18 @@ Developer checks (Nushell):
 ./target/release/tidal-forces --check-account
 ./target/release/tidal-forces --check-account --refresh
 ./target/release/tidal-forces --verify-playback 257836968 --seek
+./target/release/tidal-forces --verify-playback 471571362 --seek
 ```
 
 Account checks require sign-in. Playback verification checks nine seconds of
-lossless audio across segment boundaries; `--seek` also exercises pause/resume,
+audio at the best returned quality across segment boundaries; `--seek` also exercises pause/resume,
 a seek to 45 seconds, and subsequent playback (use a track longer than 50 seconds).
 The audio test plays a quiet 150 ms tone. Automated fixtures are synthesized
 locally, not TIDAL music. Tests verify FLAC segment continuity sample-for-sample,
 seeking across buffer eviction, bounded caching, manifest rejection, OAuth state,
-folder parsing, queue behavior and private credential persistence.
+folder parsing, queue behavior and private credential persistence. AAC-LC,
+HE-AAC and HE-AAC v2 fixtures verify full-rate stereo output, uninterrupted codec
+state across fragments, and seek preroll against a continuous reference decode.
 
 ## Release automation
 
@@ -191,18 +199,24 @@ is committed and all CI builds use `--locked`.
 - `api.rs` / `auth.rs`: catalog requests, pagination, authenticated manifests,
   device sign-in, PKCE and session refresh.
 - `backend.rs`: bounded command channel and generation-guarded background work.
-- `audio.rs` / `dash.rs`: native audio, segmented lossless buffering and seeking.
+- `audio.rs` / `dash.rs` / `aac.rs`: native audio, bounded FLAC/AAC buffering,
+  AAC decoder continuity, and prepared seeks.
 - `desktop.rs`: standard MPRIS integration via souvlaki's Rust/zbus backend.
 - `store.rs` / `install.rs`: private atomic sessions and desktop installation.
 
 Inspired by Spotifast's native-first architecture; API compatibility researched
 against python-tidal. Built with egui, rodio/Symphonia, stream-download,
-reqwest/rustls, Tokio, roxmltree, souvlaki/zbus and Inter fonts. Inter is by Rasmus
+reqwest/rustls, Tokio, roxmltree, souvlaki/zbus, FDK AAC and Inter fonts. Inter is by Rasmus
 Andersson, under SIL OFL (`assets/fonts/OFL.txt`). No Spotifast source or artwork
 is bundled.
 
 Not yet included: playlist/folder editing, lyrics, offline downloads, TIDAL
 Connect, infinite radio, gapless track transitions, tray icon or built-in updater.
 
-MIT licensed. Not affiliated with or endorsed by TIDAL. TIDAL is a trademark of
+The Rust application is MIT licensed; the bundled AAC codec and fonts retain
+their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md), run `--licenses` for the
+full notices, or `--export-fdk-source PATH` to extract the complete codec source
+from the executable. No separate codec installation is needed.
+
+Not affiliated with or endorsed by TIDAL. TIDAL is a trademark of
 its respective owner; this app uses its own name and original icon.

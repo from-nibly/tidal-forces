@@ -1436,17 +1436,15 @@ impl App {
                 self.send(Request::BeginPkce);
             }
             ui.add_space(8.);
-            ui.radio_value(&mut self.quality, "LOSSLESS".into(), "Lossless · FLAC");
-            ui.add_enabled_ui(!self.auth_pkce, |ui| {
-                ui.radio_value(&mut self.quality, "HIGH".into(), "Compatibility High · AAC");
-                ui.radio_value(&mut self.quality, "LOW".into(), "Compatibility Low · AAC");
-            });
+            ui.radio_value(&mut self.quality, "LOSSLESS".into(), "Prefer lossless · AAC fallback when unavailable");
+            ui.radio_value(&mut self.quality, "HIGH".into(), "High · AAC");
+            ui.radio_value(&mut self.quality, "LOW".into(), "Low · AAC");
             ui.label(RichText::new("Applies to the next track. The player shows the quality TIDAL actually returns; it never claims unverified hi-res or bit-perfect output.").size(12.).color(MUTED));
             ui.separator();
             ui.label("Shortcuts");
             ui.label(RichText::new("Media play/pause, next, previous  System-wide (MPRIS)\nSpace  Play / pause in this window\nCtrl+K  Search\nCtrl+Left / Right  Previous / next").size(13.).color(MUTED));
             ui.separator();
-            ui.label(RichText::new("Unofficial TIDAL client. Lossless sign-in streams unencrypted DASH FLAC. Compatibility sign-in supports BTS audio. If TIDAL only offers lossy audio in lossless mode, playback fails explicitly. Encrypted audio is not supported.").size(12.).color(MUTED));
+            ui.label(RichText::new("Unofficial TIDAL client. Lossless is preferred; tracks available only as AAC/HE-AAC play at the quality TIDAL provides. The player shows the actual format. Encrypted audio is not supported.").size(12.).color(MUTED));
             ui.label(RichText::new("Session tokens are stored locally in a private (0600) file. Signing out removes them. No passwords, telemetry, or third-party music proxies.").size(12.).color(MUTED));
             if self.connected && ui.button("Sign out and remove saved session").clicked() {
                 self.logout(); self.settings = false;
