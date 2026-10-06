@@ -23,13 +23,19 @@ chmod +x tidal-forces-linux-x86_64
 Open **Tidal Forces** from the desktop application launcher. Installation copies
 the running executable to `~/.local/bin/tidal-forces` and registers an XDG desktop
 entry and embedded icon. No sudo is needed. Run a new download with `--install`
-and restart the app to update.
+and restart the app to update. The standalone installer also registers `tidal://`.
+
+**Home Manager installations:** update the package's GitHub release URL and
+checksum, add the TIDAL scheme to its managed desktop entry/MIME defaults, and
+apply with `home-manager switch`. Do **not** run `--install` on top of a managed
+installation or replace its executable manually.
 
 This is one executable, not Electron, an AppImage, a webview or a wrapper around
 Python/mpv/ffmpeg. It uses standard Linux runtime libraries: glibc, ALSA, your
 graphics driver/OpenGL, and X11 or Wayland. Minimal systems may need
 `libasound2`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, and `libgl1`.
-A desktop session D-Bus is needed for system media controls. The executable is
+The graphical player requires a desktop session D-Bus for single-instance
+activation and system media controls. The executable is
 not fully static and does not depend on a Nix store closure.
 
 ## Lossless sign-in
@@ -102,6 +108,44 @@ Collections paginate beyond 100 tracks via **Load more tracks**. Folder contents
 and mix tracks are fully paginated. Search returns up to 50 results per type.
 Radio loads the endpoint's initial set of up to 100 tracks; it is not an infinite
 radio feed. Daily Discovery refreshes when you open or refresh Home.
+
+## Edit playlists
+
+- **+ New playlist** in the sidebar creates a playlist in your TIDAL library's
+  root folder, with an optional description.
+- Use **… → Add to playlist…** or right-click a track. The picker includes your
+  own playlists across all folders, supports filtering, and can create a new
+  playlist with that track. The same action is available in now-playing and the
+  playback queue. Existing duplicates are skipped and reported.
+- Inside a playlist you own, use **… → Remove from this playlist…**, then confirm.
+  This removes only the selected occurrence, not every copy of that song, and
+  does not modify the playback queue. Videos/unavailable entries are excluded
+  from the audio view without losing their original playlist positions.
+- Edits use TIDAL revision checks. If a playlist changed elsewhere, refresh it
+  before editing again; the app never blindly retries an index-based deletion.
+  Followed/editorial playlists remain read-only. Collaborative editing,
+  reordering, renaming and deleting entire playlists are not included yet.
+
+## Open TIDAL links
+
+Open `tidal://track/123`, `tidal://album/123`, `tidal://artist/123`,
+`tidal://playlist/<uuid>` or `tidal://mix/<id>` using your desktop's normal URL
+handler. `tidal://browse/…` links are also supported. An existing player receives
+the link and raises its window; otherwise the app starts. Links received before
+sign-in are retained until you connect.
+
+Track links open and play that song. Album, artist, playlist and mix links open
+the corresponding page without interrupting playback. Artist pages show popular
+tracks and albums. Official `https://tidal.com/browse/…`, `www.tidal.com` and
+`listen.tidal.com` links can also be pasted into Search or passed explicitly:
+
+```nu
+tidal-forces --open 'tidal://track/471571362'
+```
+
+The app registers only the `tidal` scheme, not a catch-all HTTPS handler. Unknown
+link types, foreign hosts and malformed IDs are rejected. Authentication links
+must still go through the separate masked sign-in dialog.
 
 ## Standard desktop media controls
 
@@ -183,6 +227,19 @@ seeking across buffer eviction, bounded caching, manifest rejection, OAuth state
 folder parsing, queue behavior and private credential persistence. AAC-LC,
 HE-AAC and HE-AAC v2 fixtures verify full-rate stereo output, uninterrupted codec
 state across fragments, and seek preroll against a continuous reference decode.
+Playlist API fixtures cover pagination, duplicate skipping, ownership checks,
+revision conflicts, and exact occurrence removal. URI parsing rejects untrusted
+hosts and malformed identifiers. Test single-instance activation on an isolated
+bus so it cannot contact your running player:
+
+```nu
+dbus-run-session -- cargo test --locked single_instance_forwards_links_and_activation -- --ignored
+```
+
+`live_playlist_round_trip` is separately ignored by default: explicitly running
+it creates a temporary playlist on the signed-in account, verifies create/add/
+duplicate/remove behavior, then deletes that test playlist. Never run all ignored
+tests blindly against a real account.
 
 ## Release automation
 
@@ -201,7 +258,8 @@ is committed and all CI builds use `--locked`.
 - `backend.rs`: bounded command channel and generation-guarded background work.
 - `audio.rs` / `dash.rs` / `aac.rs`: native audio, bounded FLAC/AAC buffering,
   AAC decoder continuity, and prepared seeks.
-- `desktop.rs`: standard MPRIS integration via souvlaki's Rust/zbus backend.
+- `desktop.rs` / `links.rs`: standard MPRIS integration, strict URI parsing and
+  session-bus single-instance activation.
 - `store.rs` / `install.rs`: private atomic sessions and desktop installation.
 
 Inspired by Spotifast's native-first architecture; API compatibility researched
@@ -210,7 +268,8 @@ reqwest/rustls, Tokio, roxmltree, souvlaki/zbus, FDK AAC and Inter fonts. Inter 
 Andersson, under SIL OFL (`assets/fonts/OFL.txt`). No Spotifast source or artwork
 is bundled.
 
-Not yet included: playlist/folder editing, lyrics, offline downloads, TIDAL
+Not yet included: playlist reordering/renaming/deletion, folder editing,
+lyrics, offline downloads, TIDAL
 Connect, infinite radio, gapless track transitions, tray icon or built-in updater.
 
 The Rust application is MIT licensed; the bundled AAC codec and fonts retain

@@ -26,7 +26,7 @@ jobs:
       - name: Install native build and smoke-test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb
+          sudo apt-get install -y build-essential libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -39,6 +39,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests
         run: cargo test --locked
+      - name: Single-instance URI activation
+        run: dbus-run-session -- cargo test --locked single_instance_forwards_links_and_activation -- --ignored
       - name: Build the single executable
         run: cargo build --locked --release
       - name: Verify release executable

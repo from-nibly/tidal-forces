@@ -1,6 +1,6 @@
 [package]
 name = "tidal-forces"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A fast, native TIDAL desktop player"
@@ -28,6 +28,7 @@ stream-download = { version = "0.22", default-features = false, features = ["req
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 webbrowser = "1"
+zbus = "3.15.2"
 
 [profile.release]
 lto = "thin"

@@ -1,7 +1,10 @@
 use crate::{
     backend::{Backend, Event, Request},
     desktop::{DesktopControls, MediaControlEvent},
-    model::{Album, Artist, LibraryEntry, Mix, RadioSeed, Track, cover_url, time},
+    links::{Instance, Link},
+    model::{
+        Album, Artist, LibraryEntry, Mix, Playlist, PlaylistPage, RadioSeed, Track, cover_url, time,
+    },
     queue::Queue,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
@@ -18,6 +21,8 @@ enum Page {
     Home,
     Search,
     Favorites,
+    Track(u64),
+    Artist(u64),
     Mix {
         id: String,
         title: String,
@@ -30,7 +35,32 @@ enum Page {
     },
 }
 
+enum TrackAction {
+    Radio(RadioSeed),
+    Add(Track),
+}
+struct Removal {
+    playlist: String,
+    title: String,
+    index: usize,
+    track: Track,
+    etag: String,
+}
+
 pub struct App {
+    instance: Option<Instance>,
+    pending_link: Option<Link>,
+    playlist_page: Option<PlaylistPage>,
+    playlist_dialog: bool,
+    playlist_target: Option<Track>,
+    owned_playlists: Vec<Playlist>,
+    playlist_filter: String,
+    new_playlist_title: String,
+    new_playlist_description: String,
+    playlist_busy: bool,
+    playlist_error: Option<String>,
+    removal: Option<Removal>,
+    notice: Option<String>,
     backend: Backend,
     screenshot: Option<std::path::PathBuf>,
     connected: bool,
@@ -72,7 +102,15 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<std::path::PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        screenshot: Option<std::path::PathBuf>,
+        instance: Option<Instance>,
+        pending_link: Option<Link>,
+    ) -> Self {
+        if let Some(instance) = &instance {
+            instance.attach(cc.egui_ctx.clone());
+        }
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = BG;
         visuals.window_fill = PANEL;
@@ -124,6 +162,19 @@ impl App {
             .err()
             .map(|e| format!("Desktop media controls unavailable: {e}"));
         Self {
+            instance,
+            pending_link,
+            playlist_page: None,
+            playlist_dialog: false,
+            playlist_target: None,
+            owned_playlists: Vec::new(),
+            playlist_filter: String::new(),
+            new_playlist_title: String::new(),
+            new_playlist_description: String::new(),
+            playlist_busy: false,
+            playlist_error: None,
+            removal: None,
+            notice: None,
             backend: Backend::new(cc.egui_ctx.clone()),
             screenshot,
             connected: false,
@@ -170,12 +221,15 @@ impl App {
             self.loading = false;
             self.buffering = false;
             self.signing_in = false;
+            self.playlist_busy = false;
             self.error = Some("The background worker is busy or unavailable. Please retry.".into());
         }
     }
 
     fn navigate(&mut self, page: Page) {
         self.page = page;
+        self.removal = None;
+        self.playlist_page = None;
         self.generation += 1;
         self.tracks.clear();
         self.albums.clear();
@@ -199,6 +253,14 @@ impl App {
         if self.query.trim().is_empty() {
             return;
         }
+        if self.query.starts_with("tidal:") || self.query.starts_with("https:") {
+            match Link::parse(self.query.trim()) {
+                Ok(link) => self.open_link(link),
+                Err(e) => self.error = Some(e.to_string()),
+            }
+            return;
+        }
+        self.playlist_page = None;
         self.page = Page::Search;
         self.generation += 1;
         self.loading = true;
@@ -213,6 +275,26 @@ impl App {
     fn load_page(&mut self, offset: usize) {
         self.loading = true;
         match &self.page {
+            Page::Track(id) => self.send(Request::Track {
+                generation: self.generation,
+                id: *id,
+            }),
+            Page::Artist(id) => self.send(Request::Artist {
+                generation: self.generation,
+                id: *id,
+            }),
+            Page::Collection { kind, id, .. } if kind == "playlists" => {
+                self.send(Request::Playlist {
+                    generation: self.generation,
+                    id: id.clone(),
+                    offset,
+                    etag: if offset > 0 {
+                        self.playlist_page.as_ref().map(|p| p.etag.clone())
+                    } else {
+                        None
+                    },
+                })
+            }
             Page::Home => self.send(Request::Home {
                 generation: self.generation,
             }),
@@ -306,12 +388,83 @@ impl App {
         self.loading = false;
         self.connected = false;
         self.login = None;
+        self.playlist_dialog = false;
+        self.playlist_target = None;
+        self.playlist_page = None;
+        self.removal = None;
+        self.owned_playlists.clear();
         self.send(Request::Logout);
     }
 
     fn events(&mut self) {
         while let Ok(event) = self.backend.rx.try_recv() {
             match event {
+                Event::Playlist {
+                    generation,
+                    mut page,
+                    append,
+                } if generation == self.generation => {
+                    if append && let Some(old) = self.playlist_page.take() {
+                        let mut rows = old.rows;
+                        rows.append(&mut page.rows);
+                        page.rows = rows;
+                    }
+                    self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
+                    self.more = page.more;
+                    if let Page::Collection { title, .. } = &mut self.page {
+                        *title = page.playlist.title.clone();
+                    }
+                    self.playlist_page = Some(page);
+                    self.loading = false;
+                }
+                Event::CollectionTitle { generation, title } if generation == self.generation => {
+                    if let Page::Collection { title: current, .. } = &mut self.page {
+                        *current = title;
+                    }
+                }
+                Event::OwnedPlaylists(playlists) => {
+                    self.owned_playlists = playlists;
+                    self.playlist_busy = false;
+                }
+                Event::PlaylistCreated(playlist) => {
+                    self.new_playlist_title.clear();
+                    self.new_playlist_description.clear();
+                    self.notice = Some(format!("Created {}.", playlist.title));
+                    self.owned_playlists.insert(0, playlist.clone());
+                    self.refresh_folders();
+                    if let Some(track) = &self.playlist_target {
+                        self.send(Request::AddToPlaylist {
+                            id: playlist.uuid,
+                            track: track.id,
+                        });
+                    } else {
+                        self.playlist_busy = false;
+                        self.playlist_dialog = false;
+                        self.navigate(Page::Collection {
+                            kind: "playlists".into(),
+                            id: playlist.uuid,
+                            title: playlist.title,
+                        });
+                    }
+                }
+                Event::PlaylistEdited { id, message } => {
+                    self.playlist_busy = false;
+                    self.playlist_dialog = false;
+                    self.playlist_target = None;
+                    self.removal = None;
+                    self.notice = Some(message);
+                    self.refresh_folders();
+                    if matches!(&self.page, Page::Collection { kind, id: current, .. } if kind == "playlists" && *current == id)
+                    {
+                        self.generation += 1;
+                        self.load_page(0);
+                    }
+                }
+                Event::PlaylistError(message) => {
+                    self.playlist_busy = false;
+                    self.playlist_error = Some(message.clone());
+                    self.error = Some(message);
+                }
                 Event::PkceReady(url) => {
                     self.pkce_wait = false;
                     self.signing_in = false;
@@ -337,9 +490,19 @@ impl App {
                     self.folders.clear();
                     self.expanded.clear();
                     self.folder_pending.clear();
+                    self.playlist_page = None;
+                    self.playlist_dialog = false;
+                    self.playlist_target = None;
+                    self.playlist_busy = false;
+                    self.owned_playlists.clear();
+                    self.removal = None;
                     if self.connected {
                         self.request_folder("root");
-                        self.navigate(Page::Home);
+                        if let Some(link) = self.pending_link.take() {
+                            self.open_link(link);
+                        } else {
+                            self.navigate(Page::Home);
+                        }
                     } else {
                         self.tracks.clear();
                         self.albums.clear();
@@ -379,6 +542,9 @@ impl App {
                         self.tracks = tracks;
                     }
                     self.loading = false;
+                    if matches!(self.page, Page::Track(_)) && !self.tracks.is_empty() {
+                        self.play_track(0);
+                    }
                 }
                 Event::Home { generation, home } if generation == self.generation => {
                     self.daily = home.daily;
@@ -500,6 +666,10 @@ impl App {
                     self.volume = v.clamp(0., 1.) as f32;
                     self.backend.player.volume(self.volume);
                 }
+                MediaControlEvent::OpenUri(uri) => match Link::parse(&uri) {
+                    Ok(link) => self.open_link(link),
+                    Err(e) => self.error = Some(e.to_string()),
+                },
                 MediaControlEvent::Raise => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
                 MediaControlEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 _ => {}
@@ -514,6 +684,79 @@ impl App {
         if let Some(t) = self.queue.current() {
             self.position = seconds.min(t.duration.saturating_sub(1));
             self.backend.player.seek(self.position);
+        }
+    }
+
+    fn open_link(&mut self, link: Link) {
+        if !self.connected {
+            self.pending_link = Some(link);
+            return;
+        }
+        self.error = None;
+        match link {
+            Link::Track(id) => self.navigate(Page::Track(id)),
+            Link::Artist(id) => self.navigate(Page::Artist(id)),
+            Link::Album(id) => self.navigate(Page::Collection {
+                kind: "albums".into(),
+                id: id.to_string(),
+                title: "Album".into(),
+            }),
+            Link::Playlist(id) => self.navigate(Page::Collection {
+                kind: "playlists".into(),
+                id,
+                title: "Playlist".into(),
+            }),
+            Link::Mix(id) => self.navigate(Page::Mix {
+                id,
+                title: "TIDAL mix".into(),
+            }),
+        }
+    }
+
+    fn link_events(&mut self, ctx: &egui::Context) {
+        let events: Vec<_> = self
+            .instance
+            .as_ref()
+            .map(|i| i.events.try_iter().collect())
+            .unwrap_or_default();
+        for link in events {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if let Some(link) = link {
+                self.open_link(link);
+            }
+        }
+    }
+
+    fn refresh_folders(&mut self) {
+        let mut ids: Vec<_> = self.expanded.iter().cloned().collect();
+        ids.push("root".into());
+        for id in ids {
+            self.request_folder(&id);
+        }
+    }
+
+    fn apply_track_action(&mut self, action: TrackAction) {
+        match action {
+            TrackAction::Radio(seed) => self.navigate(Page::Radio(seed)),
+            TrackAction::Add(track) => self.open_playlist_dialog(Some(track)),
+        }
+    }
+
+    fn open_playlist_dialog(&mut self, track: Option<Track>) {
+        if !self.connected || self.playlist_busy {
+            return;
+        }
+        self.playlist_dialog = true;
+        self.playlist_target = track;
+        self.playlist_error = None;
+        self.playlist_filter.clear();
+        self.new_playlist_title.clear();
+        self.new_playlist_description.clear();
+        if self.playlist_target.is_some() {
+            self.owned_playlists.clear();
+            self.playlist_busy = true;
+            self.send(Request::OwnedPlaylists);
         }
     }
 
@@ -617,6 +860,13 @@ impl App {
                         .strong(),
                 );
                 ui.add_space(6.);
+                if self.connected
+                    && ui
+                        .add_enabled(!self.playlist_busy, egui::Button::new("+ New playlist"))
+                        .clicked()
+                {
+                    self.open_playlist_dialog(None);
+                }
                 egui::ScrollArea::vertical()
                     .id_salt("playlists")
                     .max_height((ui.available_height() - 145.).max(50.))
@@ -673,7 +923,7 @@ impl App {
                             ui.set_min_size(vec2(width * 0.29, 74.));
                             if let Some(track) = self.queue.current() {
                                 artwork(ui, track.cover_url(80), 60.)
-                                    .context_menu(|ui| radio_menu(ui, track, &mut radio));
+                                    .context_menu(|ui| track_menu(ui, track, &mut radio));
                                 ui.vertical(|ui| {
                                     ui.add_space(9.);
                                     ui.add(
@@ -825,7 +1075,7 @@ impl App {
                                 self.queue_open = !self.queue_open;
                             }
                             if let Some(track) = self.queue.current() {
-                                ui.menu_button("...", |ui| radio_menu(ui, track, &mut radio));
+                                ui.menu_button("...", |ui| track_menu(ui, track, &mut radio));
                             }
                             ui.spacing_mut().slider_width = 75.;
                             if ui
@@ -844,7 +1094,7 @@ impl App {
                 });
             });
         if let Some(seed) = radio {
-            self.navigate(Page::Radio(seed));
+            self.apply_track_action(seed);
         }
     }
 
@@ -884,7 +1134,7 @@ impl App {
                             .frame(i == self.queue.index)
                             .min_size(vec2(ui.available_width(), 58.)),
                         );
-                        response.context_menu(|ui| radio_menu(ui, track, &mut radio));
+                        response.context_menu(|ui| track_menu(ui, track, &mut radio));
                         if response.clicked() {
                             selected = Some(i);
                         }
@@ -899,7 +1149,7 @@ impl App {
                 }
             });
         if let Some(seed) = radio {
-            self.navigate(Page::Radio(seed));
+            self.apply_track_action(seed);
         }
     }
 
@@ -1075,11 +1325,28 @@ impl App {
                 });
             ui.add_space(12.);
         }
+        if let Some(notice) = self.notice.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(ACCENT, notice);
+                if ui.small_button("Dismiss").clicked() {
+                    self.notice = None;
+                }
+            });
+        }
         if !self.connected {
+            if self.pending_link.is_some() {
+                ui.label("Sign in to open your TIDAL link.");
+            }
             self.welcome(ui);
             return;
         }
         match &self.page {
+            Page::Track(_) => {
+                ui.heading(self.tracks.first().map_or("Track", |t| t.title.as_str()));
+            }
+            Page::Artist(_) => {
+                ui.heading(self.artists.first().map_or("Artist", |a| a.name.as_str()));
+            }
             Page::Home => {
                 ui.horizontal(|ui| {
                     if let Some(daily) = &self.daily {
@@ -1135,7 +1402,7 @@ impl App {
             let response = ui.add_sized(
                 [ui.available_width() - 95., 40.],
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text("Search artists, tracks, albums")
+                    .hint_text("Search music or paste a TIDAL link")
                     .margin(vec2(14., 10.)),
             );
             if self.focus_search {
@@ -1301,7 +1568,11 @@ impl App {
                 .add_enabled(!self.loading, egui::Button::new("Load more tracks"))
                 .clicked()
         {
-            self.load_page(self.tracks.len());
+            self.load_page(
+                self.playlist_page
+                    .as_ref()
+                    .map_or(self.tracks.len(), |p| p.next_offset),
+            );
         }
     }
 
@@ -1309,6 +1580,10 @@ impl App {
         let mut play = None;
         let mut add = None;
         let mut radio = None;
+        let mut remove = None;
+        let removable = !self.loading
+            && !self.playlist_busy
+            && self.playlist_page.as_ref().is_some_and(|p| p.editable);
         for (i, t) in self.tracks.iter().enumerate() {
             let playing = self
                 .queue
@@ -1356,8 +1631,15 @@ impl App {
                     );
                 },
             );
+            let mut menu = |ui: &mut egui::Ui| {
+                track_menu(ui, t, &mut radio);
+                if removable && ui.button("Remove from this playlist…").clicked() {
+                    remove = Some(i);
+                    ui.close();
+                }
+            };
             row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("...", |ui| radio_menu(ui, t, &mut radio));
+                ui.menu_button("...", &mut menu);
                 if ui.small_button("+").on_hover_text("Add to queue").clicked() {
                     add = Some(t.clone());
                 }
@@ -1375,8 +1657,10 @@ impl App {
             if response.double_clicked() && self.audio_available {
                 play = Some(i);
             }
-            response.context_menu(|ui| radio_menu(ui, t, &mut radio));
-            response.on_hover_text("Double-click to play · Right-click for radio · + to queue");
+            response.context_menu(menu);
+            response.on_hover_text(
+                "Double-click to play · Right-click for playlists and radio · + to queue",
+            );
         }
         if let Some(i) = play {
             self.play_track(i);
@@ -1386,7 +1670,166 @@ impl App {
             self.queue_open = true;
         }
         if let Some(seed) = radio {
-            self.navigate(Page::Radio(seed));
+            self.apply_track_action(seed);
+        }
+        if let Some(i) = remove
+            && let Some(page) = &self.playlist_page
+            && let Some((index, track)) = page.rows.get(i)
+        {
+            self.playlist_error = None;
+            self.removal = Some(Removal {
+                playlist: page.playlist.uuid.clone(),
+                title: page.playlist.title.clone(),
+                index: *index,
+                track: track.clone(),
+                etag: page.etag.clone(),
+            });
+        }
+    }
+
+    fn playlist_windows(&mut self, ctx: &egui::Context) {
+        if self.playlist_dialog {
+            let mut open = true;
+            let mut add = None;
+            let mut create = false;
+            egui::Window::new(if self.playlist_target.is_some() {
+                "Add to playlist"
+            } else {
+                "Create playlist"
+            })
+            .id(egui::Id::new("playlist_editor"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.)
+            .show(ctx, |ui| {
+                if let Some(track) = &self.playlist_target {
+                    ui.label(RichText::new(&track.title).strong());
+                    ui.label(RichText::new(&track.artist.name).color(MUTED));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.playlist_filter)
+                            .hint_text("Find one of your playlists"),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height(230.)
+                        .show(ui, |ui| {
+                            for playlist in &self.owned_playlists {
+                                if !playlist
+                                    .title
+                                    .to_lowercase()
+                                    .contains(&self.playlist_filter.to_lowercase())
+                                {
+                                    continue;
+                                }
+                                if ui
+                                    .add_enabled(
+                                        !self.playlist_busy,
+                                        egui::Button::new(format!(
+                                            "{}  ·  {} tracks",
+                                            playlist.title, playlist.number_of_tracks
+                                        )),
+                                    )
+                                    .clicked()
+                                {
+                                    add = Some(playlist.uuid.clone());
+                                }
+                            }
+                            if self.owned_playlists.is_empty() && !self.playlist_busy {
+                                ui.label("No editable playlists yet. Create one below.");
+                            }
+                        });
+                    ui.separator();
+                    ui.label("Or create a new playlist");
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_playlist_title)
+                        .hint_text("Playlist name")
+                        .char_limit(200),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.new_playlist_description)
+                        .hint_text("Description (optional)")
+                        .desired_rows(2)
+                        .char_limit(1000),
+                );
+                if let Some(error) = &self.playlist_error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+                if self.playlist_busy {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Waiting for TIDAL…");
+                    });
+                }
+                let label = if self.playlist_target.is_some() {
+                    "Create and add track"
+                } else {
+                    "Create playlist"
+                };
+                create = ui
+                    .add_enabled(
+                        !self.playlist_busy && !self.new_playlist_title.trim().is_empty(),
+                        egui::Button::new(label),
+                    )
+                    .clicked();
+            });
+            self.playlist_dialog = open;
+            if let Some(id) = add
+                && let Some(track) = &self.playlist_target
+            {
+                self.playlist_busy = true;
+                self.playlist_error = None;
+                self.send(Request::AddToPlaylist {
+                    id,
+                    track: track.id,
+                });
+            } else if create {
+                self.playlist_busy = true;
+                self.playlist_error = None;
+                self.send(Request::CreatePlaylist {
+                    title: self.new_playlist_title.trim().into(),
+                    description: self.new_playlist_description.clone(),
+                });
+            }
+        }
+        if let Some(removal) = &self.removal {
+            let mut open = true;
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Remove track?")
+                .default_width(420.)
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Remove “{}” from “{}”?",
+                        removal.track.title, removal.title
+                    ));
+                    ui.label("Only this occurrence is removed. Your playback queue is unchanged.");
+                    if let Some(error) = &self.playlist_error {
+                        ui.colored_label(Color32::LIGHT_RED, error);
+                    }
+                    ui.horizontal(|ui| {
+                        confirm = ui
+                            .add_enabled(!self.playlist_busy, egui::Button::new("Remove track"))
+                            .clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+            if confirm {
+                self.playlist_busy = true;
+                self.playlist_error = None;
+                self.send(Request::RemoveFromPlaylist {
+                    id: removal.playlist.clone(),
+                    index: removal.index,
+                    track: removal.track.id,
+                    etag: removal.etag.clone(),
+                });
+            }
+            if !open || cancel {
+                self.removal = None;
+            }
         }
     }
 
@@ -1477,6 +1920,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.link_events(ctx);
         self.events();
         self.desktop_events(ctx);
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
@@ -1507,6 +1951,7 @@ impl eframe::App for App {
             });
         self.settings(ctx);
         self.lossless_sign_in(ctx);
+        self.playlist_windows(ctx);
         if let Some(media) = &mut self.media
             && let Err(e) = media.update(
                 self.queue.current(),
@@ -1547,12 +1992,17 @@ fn folder_button(ui: &mut egui::Ui, name: &str, expanded: bool) -> egui::Respons
     response
 }
 
-fn radio_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<RadioSeed>) {
+fn track_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<TrackAction>) {
+    if ui.button("Add to playlist…").clicked() {
+        *radio = Some(TrackAction::Add(track.clone()));
+        ui.close();
+    }
+    ui.separator();
     if ui.button("Start track radio").clicked() {
-        *radio = Some(RadioSeed::Track {
+        *radio = Some(TrackAction::Radio(RadioSeed::Track {
             id: track.id,
             title: track.title.clone(),
-        });
+        }));
         ui.close();
     }
     if track.artist.id != 0
@@ -1560,10 +2010,10 @@ fn radio_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<RadioSeed>) {
             .button(format!("Start artist radio · {}", track.artist.name))
             .clicked()
     {
-        *radio = Some(RadioSeed::Artist {
+        *radio = Some(TrackAction::Radio(RadioSeed::Artist {
             id: track.artist.id,
             name: track.artist.name.clone(),
-        });
+        }));
         ui.close();
     }
 }

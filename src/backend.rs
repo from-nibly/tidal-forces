@@ -1,7 +1,7 @@
 use crate::{
     api::{Api, DeviceLogin, LoginPoll, Search},
     audio::Player,
-    model::{Home, LibraryEntry, RadioSeed, Track},
+    model::{Home, LibraryEntry, Playlist, PlaylistPage, RadioSeed, Track},
     store,
 };
 use std::{
@@ -44,6 +44,35 @@ pub enum Request {
         id: String,
         offset: usize,
     },
+    Playlist {
+        generation: u64,
+        id: String,
+        offset: usize,
+        etag: Option<String>,
+    },
+    Track {
+        generation: u64,
+        id: u64,
+    },
+    Artist {
+        generation: u64,
+        id: u64,
+    },
+    OwnedPlaylists,
+    CreatePlaylist {
+        title: String,
+        description: String,
+    },
+    AddToPlaylist {
+        id: String,
+        track: u64,
+    },
+    RemoveFromPlaylist {
+        id: String,
+        index: usize,
+        track: u64,
+        etag: String,
+    },
     Play {
         generation: u64,
         id: u64,
@@ -52,6 +81,22 @@ pub enum Request {
 }
 
 pub enum Event {
+    Playlist {
+        generation: u64,
+        page: PlaylistPage,
+        append: bool,
+    },
+    CollectionTitle {
+        generation: u64,
+        title: String,
+    },
+    OwnedPlaylists(Vec<Playlist>),
+    PlaylistCreated(Playlist),
+    PlaylistEdited {
+        id: String,
+        message: String,
+    },
+    PlaylistError(String),
     PkceReady(String),
     AuthKind(bool),
     Session(Option<String>),
@@ -170,9 +215,11 @@ impl Backend {
                             let request_generation = match &request {
                                 Request::Search { generation, .. } | Request::Favorites { generation, .. } |
                                 Request::Collection { generation, .. } | Request::Home { generation } |
-                                Request::Mix { generation, .. } | Request::Radio { generation, .. } => Some(*generation),
+                                Request::Mix { generation, .. } | Request::Radio { generation, .. } |
+                                Request::Playlist { generation, .. } | Request::Track { generation, .. } | Request::Artist { generation, .. } => Some(*generation),
                                 _ => None,
                             };
+                            let playlist_edit = matches!(&request, Request::OwnedPlaylists | Request::CreatePlaylist { .. } | Request::AddToPlaylist { .. } | Request::RemoveFromPlaylist { .. });
                             let folder_id = match &request { Request::Folder { id } => Some(id.clone()), _ => None };
                             let playback_generation = match &request { Request::Play { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
@@ -226,7 +273,24 @@ impl Backend {
                                         let tracks = api.radio(&seed).await?;
                                         events.send(Event::Radio { generation, tracks });
                                     }
+                                    Request::Playlist { generation, id, offset, etag } => {
+                                        let page = api.playlist_page(&id, offset, etag.as_deref()).await?;
+                                        events.send(Event::Playlist { generation, page, append: offset > 0 });
+                                    }
+                                    Request::Track { generation, id } => events.send(Event::Tracks { generation, tracks: vec![api.track(id).await?], append: false }),
+                                    Request::Artist { generation, id } => events.send(Event::Search { generation, data: api.artist(id).await? }),
+                                    Request::OwnedPlaylists => events.send(Event::OwnedPlaylists(api.owned_playlists().await?)),
+                                    Request::CreatePlaylist { title, description } => events.send(Event::PlaylistCreated(api.create_playlist(&title, &description).await?)),
+                                    Request::AddToPlaylist { id, track } => {
+                                        let added = api.add_to_playlist(&id, track).await?;
+                                        events.send(Event::PlaylistEdited { id, message: if added { "Track added to playlist." } else { "That track is already in the playlist." }.into() });
+                                    }
+                                    Request::RemoveFromPlaylist { id, index, track, etag } => {
+                                        api.remove_from_playlist(&id, index, track, &etag).await?;
+                                        events.send(Event::PlaylistEdited { id, message: "Track removed from playlist.".into() });
+                                    }
                                     Request::Collection { generation, kind, id, offset } => {
+                                        if offset == 0 { events.send(Event::CollectionTitle { generation, title: api.collection_title(&kind, &id).await? }); }
                                         let tracks = api.collection(&kind, &id, offset).await?;
                                         events.send(Event::Tracks { generation, tracks, append: offset > 0 });
                                     }
@@ -245,7 +309,7 @@ impl Backend {
                                 Ok(())
                             }.await;
                             if let Err(e) = result {
-                                events.send(if let Some(id) = folder_id {
+                                events.send(if playlist_edit { Event::PlaylistError(e.to_string()) } else if let Some(id) = folder_id {
                                     Event::FolderError { id, message: e.to_string() }
                                 } else if let Some(generation) = request_generation {
                                     Event::RequestError { generation, message: e.to_string() }

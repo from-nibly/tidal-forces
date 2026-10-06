@@ -51,6 +51,25 @@ pub struct Playlist {
     pub title: String,
     #[serde(default)]
     pub number_of_tracks: u64,
+    #[serde(default)]
+    pub number_of_videos: u64,
+    #[serde(default)]
+    pub creator: PlaylistCreator,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PlaylistCreator {
+    pub id: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaylistPage {
+    pub playlist: Playlist,
+    pub etag: String,
+    pub editable: bool,
+    pub rows: Vec<(usize, Track)>,
+    pub next_offset: usize,
+    pub more: bool,
 }
 
 #[derive(Clone, Debug)]

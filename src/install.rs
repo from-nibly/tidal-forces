@@ -32,7 +32,7 @@ pub fn install() -> Result<PathBuf> {
         include_str!("../assets/icon.svg"),
     )?;
     let desktop = format!(
-        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Tidal Forces\nGenericName=Music Player\nComment=A fast, native TIDAL player\nExec={}\nIcon=rocks.tidalforces.Player\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nKeywords=tidal;music;lossless;flac;\nStartupWMClass=rocks.tidalforces.Player\nStartupNotify=true\n",
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Tidal Forces\nGenericName=Music Player\nComment=A fast, native TIDAL player\nExec={} %u\nMimeType=x-scheme-handler/tidal;\nIcon=rocks.tidalforces.Player\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nKeywords=tidal;music;lossless;flac;\nStartupWMClass=rocks.tidalforces.Player\nStartupNotify=true\n",
         desktop_exec(&bin)?
     );
     let mut file = fs::File::create(apps.join("rocks.tidalforces.Player.desktop"))?;
@@ -40,6 +40,18 @@ pub fn install() -> Result<PathBuf> {
     let _ = std::process::Command::new("update-desktop-database")
         .arg(&apps)
         .status();
+    let status = std::process::Command::new("xdg-mime")
+        .args([
+            "default",
+            "rocks.tidalforces.Player.desktop",
+            "x-scheme-handler/tidal",
+        ])
+        .status();
+    if !status.is_ok_and(|s| s.success()) {
+        eprintln!(
+            "Could not set the default tidal:// handler; select Tidal Forces in your desktop settings."
+        );
+    }
     println!(
         "Installed {}\nDesktop launcher: {}",
         bin.display(),

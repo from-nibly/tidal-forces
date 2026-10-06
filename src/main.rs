@@ -9,6 +9,7 @@ mod dash;
 mod desktop;
 mod install;
 mod licenses;
+mod links;
 mod model;
 mod queue;
 mod store;
@@ -19,6 +20,7 @@ use anyhow::{Context, Result};
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let smoke_dir = tempfile::tempdir()?;
+    let mut link_uri = None;
     let screenshot = match args.first().map(String::as_str) {
         Some("--smoke-ui") => Some(smoke_dir.path().join("smoke.png")),
         Some("--screenshot") => Some(std::path::PathBuf::from(
@@ -52,14 +54,29 @@ fn main() -> Result<()> {
         }
         Some("--help") => {
             println!(
-                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of preferred-quality audio; --seek also tests pause and seek\n  --version           Show version\n  --licenses          Show bundled codec and font license notices\n  --export-fdk-source PATH  Export the complete bundled AAC codec source\n\nStart without arguments to open the player."
+                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of preferred-quality audio; --seek also tests pause and seek\n  --version           Show version\n  --licenses          Show bundled codec and font license notices\n  --export-fdk-source PATH  Export the complete bundled AAC codec source\n  --open URI          Open a tidal:// or official TIDAL web link\n\nStart without arguments to open the player, or pass a TIDAL URI directly."
             );
             return Ok(());
+        }
+        Some("--open") => {
+            link_uri = Some(args.get(1).context("Supply a TIDAL link")?.as_str());
+        }
+        Some(arg) if arg.starts_with("tidal:") || arg.starts_with("https:") => {
+            link_uri = Some(arg);
         }
         Some("--smoke-ui" | "--screenshot") => {}
         Some(arg) => anyhow::bail!("Unknown argument: {arg}. Use --help."),
         None => {}
     }
+    let initial_link = link_uri.map(links::Link::parse).transpose()?;
+    let instance = if screenshot.is_none() {
+        match links::Instance::start(link_uri)? {
+            Some(instance) => Some(instance),
+            None => return Ok(()),
+        }
+    } else {
+        None
+    };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_app_id("rocks.tidalforces.Player")
@@ -88,7 +105,7 @@ fn main() -> Result<()> {
                     ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Close);
                 });
             }
-            Ok(Box::new(ui::App::new(cc, capture)))
+            Ok(Box::new(ui::App::new(cc, capture, instance, initial_link)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("Could not start the desktop player: {e}"))?;

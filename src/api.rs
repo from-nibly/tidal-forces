@@ -1,10 +1,10 @@
 use crate::{
-    model::{Album, Artist, Home, LibraryEntry, Mix, Playlist, RadioSeed, Track},
+    model::{Album, Artist, Home, LibraryEntry, Mix, Playlist, PlaylistPage, RadioSeed, Track},
     store::{self, Session},
 };
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Method, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -18,6 +18,7 @@ const AUTH: &str = "https://auth.tidal.com/v1/oauth2";
 #[derive(Clone)]
 pub struct Api {
     client: Client,
+    base: String,
     pub session: Option<Session>,
     client_id: String,
     client_secret: String,
@@ -46,8 +47,9 @@ impl Api {
             client: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(30))
-                .user_agent("TidalForces/0.1")
+                .user_agent(concat!("TidalForces/", env!("CARGO_PKG_VERSION")))
                 .build()?,
+            base: "https://api.tidal.com".into(),
             session: None,
             client_id: std::env::var("TIDAL_CLIENT_ID").unwrap_or_else(|_| CLIENT_ID.into()),
             client_secret: std::env::var("TIDAL_CLIENT_SECRET")
@@ -198,6 +200,22 @@ impl Api {
         path: &str,
         params: &[(&str, &str)],
     ) -> Result<Value> {
+        Ok(self
+            .request(Method::GET, version, path, params, &[], None)
+            .await?
+            .json()
+            .await?)
+    }
+
+    async fn request(
+        &mut self,
+        method: Method,
+        version: &str,
+        path: &str,
+        params: &[(&str, &str)],
+        form: &[(&str, &str)],
+        revision: Option<&str>,
+    ) -> Result<Response> {
         if self
             .session
             .as_ref()
@@ -209,19 +227,31 @@ impl Api {
         }
         for attempt in 0..2 {
             let s = self.session.as_ref().context("Sign in to TIDAL first")?;
-            let r = self
+            let mut request = self
                 .client
-                .get(format!("https://api.tidal.com/{version}/{path}"))
+                .request(method.clone(), format!("{}/{version}/{path}", self.base))
                 .bearer_auth(&s.access_token)
                 .query(&[("countryCode", s.country.as_str())])
-                .query(params)
-                .send()
-                .await?;
+                .query(params);
+            if !form.is_empty() {
+                request = request.form(form);
+            }
+            // TIDAL's playlist API uses If-None-Match as its revision guard.
+            if let Some(etag) = revision {
+                request = request.header("If-None-Match", etag);
+            }
+            let r = request.send().await.map_err(|e| {
+                if method == Method::GET { anyhow::Error::from(e) }
+                else { anyhow::anyhow!("Could not confirm the change with TIDAL. It may have completed; refresh before retrying.") }
+            })?;
             if r.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
                 self.refresh().await?;
                 continue;
             }
-            return Ok(check(r).await?.json().await?);
+            if r.status() == StatusCode::PRECONDITION_FAILED || r.status() == StatusCode::CONFLICT {
+                bail!("The playlist changed elsewhere. Refresh it before editing again.");
+            }
+            return check(r).await;
         }
         bail!("Session expired; sign in again")
     }
@@ -370,11 +400,7 @@ impl Api {
     }
 
     pub async fn collection(&mut self, kind: &str, id: &str, offset: usize) -> Result<Vec<Track>> {
-        anyhow::ensure!(matches!(kind, "albums" | "playlists"), "Invalid collection");
-        anyhow::ensure!(
-            id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-            "Invalid ID"
-        );
+        validate_collection(kind, id)?;
         let v = self
             .get(
                 &format!("{kind}/{id}/tracks"),
@@ -382,6 +408,258 @@ impl Api {
             )
             .await?;
         items(&v)
+    }
+
+    pub async fn track(&mut self, id: u64) -> Result<Track> {
+        Ok(serde_json::from_value(
+            self.get(&format!("tracks/{id}"), &[]).await?,
+        )?)
+    }
+
+    pub async fn artist(&mut self, id: u64) -> Result<Search> {
+        let artist: Artist =
+            serde_json::from_value(self.get(&format!("artists/{id}"), &[]).await?)?;
+        let tracks = items(
+            &self
+                .get(&format!("artists/{id}/toptracks"), &[("limit", "100")])
+                .await?,
+        )?;
+        let albums = items(
+            &self
+                .get(&format!("artists/{id}/albums"), &[("limit", "50")])
+                .await?,
+        )?;
+        Ok(Search {
+            tracks,
+            albums,
+            artists: vec![artist],
+        })
+    }
+
+    pub async fn collection_title(&mut self, kind: &str, id: &str) -> Result<String> {
+        validate_collection(kind, id)?;
+        Ok(self.get(&format!("{kind}/{id}"), &[]).await?["title"]
+            .as_str()
+            .unwrap_or("TIDAL collection")
+            .to_owned())
+    }
+
+    async fn playlist_metadata(&mut self, id: &str) -> Result<(Playlist, String)> {
+        validate_collection("playlists", id)?;
+        let response = self
+            .request(
+                Method::GET,
+                "v1",
+                &format!("playlists/{id}"),
+                &[],
+                &[],
+                None,
+            )
+            .await?;
+        let etag = response
+            .headers()
+            .get("etag")
+            .context("TIDAL did not supply a playlist revision")?
+            .to_str()?
+            .to_owned();
+        Ok((response.json().await?, etag))
+    }
+
+    pub async fn playlist_page(
+        &mut self,
+        id: &str,
+        offset: usize,
+        expected: Option<&str>,
+    ) -> Result<PlaylistPage> {
+        let (playlist, etag) = self.playlist_metadata(id).await?;
+        if let Some(expected) = expected {
+            ensure_revision(expected, &etag)?;
+        }
+        let response = self
+            .request(
+                Method::GET,
+                "v1",
+                &format!("playlists/{id}/items"),
+                &[("limit", "100"), ("offset", &offset.to_string())],
+                &[],
+                None,
+            )
+            .await?;
+        ensure_revision(
+            &etag,
+            response
+                .headers()
+                .get("etag")
+                .context("Missing playlist item revision")?
+                .to_str()?,
+        )?;
+        let value: Value = response.json().await?;
+        let raw = value["items"]
+            .as_array()
+            .context("Missing playlist items")?;
+        let mut rows = Vec::new();
+        for (index, item) in raw.iter().enumerate() {
+            if item["type"]
+                .as_str()
+                .is_some_and(|t| t.eq_ignore_ascii_case("track"))
+                && !item["item"].is_null()
+            {
+                rows.push((
+                    offset + index,
+                    serde_json::from_value(item["item"].clone())?,
+                ));
+            }
+        }
+        let next_offset = offset + raw.len();
+        let total = value["totalNumberOfItems"]
+            .as_u64()
+            .context("Missing playlist item count")? as usize;
+        anyhow::ensure!(
+            next_offset >= total || !raw.is_empty(),
+            "Incomplete playlist page"
+        );
+        let editable = self.owns(&playlist);
+        Ok(PlaylistPage {
+            playlist,
+            etag,
+            editable,
+            rows,
+            next_offset,
+            more: next_offset < total,
+        })
+    }
+
+    fn owns(&self, playlist: &Playlist) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|s| s.user_id != 0 && playlist.creator.id == s.user_id)
+    }
+
+    pub async fn owned_playlists(&mut self) -> Result<Vec<Playlist>> {
+        let user = self.session.as_ref().context("Sign in first")?.user_id;
+        let mut playlists = Vec::new();
+        loop {
+            let value = self
+                .get(
+                    &format!("users/{user}/playlists"),
+                    &[("limit", "50"), ("offset", &playlists.len().to_string())],
+                )
+                .await?;
+            let page: Vec<Playlist> = items(&value)?;
+            let count = page.len();
+            playlists.extend(page);
+            if playlists.len()
+                >= value["totalNumberOfItems"]
+                    .as_u64()
+                    .context("Missing playlist count")? as usize
+            {
+                break;
+            }
+            anyhow::ensure!(count > 0, "Incomplete playlist listing");
+        }
+        playlists.retain(|p| self.owns(p));
+        playlists.sort_by_key(|p| p.title.to_lowercase());
+        Ok(playlists)
+    }
+
+    pub async fn create_playlist(&mut self, title: &str, description: &str) -> Result<Playlist> {
+        anyhow::ensure!(
+            !title.trim().is_empty() && title.chars().count() <= 200,
+            "Use a playlist name between 1 and 200 characters"
+        );
+        anyhow::ensure!(
+            description.chars().count() <= 1000,
+            "Description is too long"
+        );
+        let response = self
+            .request(
+                Method::PUT,
+                "v2",
+                "my-collection/playlists/folders/create-playlist",
+                &[
+                    ("name", title.trim()),
+                    ("description", description),
+                    ("folderId", "root"),
+                ],
+                &[],
+                None,
+            )
+            .await?;
+        let value: Value = response.json().await?;
+        Ok(serde_json::from_value(value["data"].clone())?)
+    }
+
+    pub async fn add_to_playlist(&mut self, id: &str, track: u64) -> Result<bool> {
+        let (playlist, etag) = self.playlist_metadata(id).await?;
+        anyhow::ensure!(
+            self.owns(&playlist),
+            "Only your own playlists can be edited"
+        );
+        let response = self
+            .request(
+                Method::POST,
+                "v1",
+                &format!("playlists/{id}/items"),
+                &[],
+                &[
+                    ("trackIds", &track.to_string()),
+                    (
+                        "toIndex",
+                        &(playlist.number_of_tracks + playlist.number_of_videos).to_string(),
+                    ),
+                    ("onDupes", "SKIP"),
+                    ("onArtifactNotFound", "FAIL"),
+                ],
+                Some(&etag),
+            )
+            .await?;
+        let value: Value = response.json().await?;
+        Ok(value["addedItemIds"]
+            .as_array()
+            .context("TIDAL did not confirm the playlist edit")?
+            .iter()
+            .any(|v| v.as_u64() == Some(track) || v.as_str() == Some(&track.to_string())))
+    }
+
+    pub async fn remove_from_playlist(
+        &mut self,
+        id: &str,
+        index: usize,
+        track: u64,
+        expected: &str,
+    ) -> Result<()> {
+        let page = self.playlist_page(id, index, Some(expected)).await?;
+        anyhow::ensure!(page.editable, "Only your own playlists can be edited");
+        anyhow::ensure!(
+            page.rows
+                .first()
+                .is_some_and(|(i, t)| *i == index && t.id == track),
+            "Playlist item changed. Refresh before removing it."
+        );
+        self.request(
+            Method::DELETE,
+            "v1",
+            &format!("playlists/{id}/items/{index}"),
+            &[],
+            &[],
+            Some(expected),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn delete_test_playlist(&mut self, id: &str) -> Result<()> {
+        self.request(
+            Method::DELETE,
+            "v1",
+            &format!("playlists/{id}"),
+            &[],
+            &[],
+            None,
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn stream(&mut self, id: u64, quality: &str) -> Result<Stream> {
@@ -399,6 +677,29 @@ impl Api {
         // Decode that authorized stream and label its actual quality, not the request.
         parse_stream(&v)
     }
+}
+
+#[cfg(test)]
+#[path = "playlist_tests.rs"]
+mod playlist_tests;
+
+fn validate_collection(kind: &str, id: &str) -> Result<()> {
+    anyhow::ensure!(
+        matches!(kind, "albums" | "playlists")
+            && !id.is_empty()
+            && id.len() <= 100
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "Invalid collection ID"
+    );
+    Ok(())
+}
+
+fn ensure_revision(expected: &str, actual: &str) -> Result<()> {
+    anyhow::ensure!(
+        !expected.is_empty() && expected == actual,
+        "The playlist changed elsewhere. Refresh it before editing again."
+    );
+    Ok(())
 }
 
 pub enum LoginPoll {
