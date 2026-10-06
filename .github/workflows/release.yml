@@ -26,11 +26,13 @@ jobs:
       - name: Install native build and smoke-test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
+          sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Lints
@@ -43,7 +45,7 @@ jobs:
         run: |
           target/release/tidal-forces --version
           ldd target/release/tidal-forces
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a target/release/tidal-forces --smoke-ui
+          LIBGL_ALWAYS_SOFTWARE=1 timeout 30s xvfb-run -a target/release/tidal-forces --smoke-ui
       - name: Package binary and checksum
         run: |
           mkdir dist

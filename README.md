@@ -31,7 +31,8 @@ Python/mpv/ffmpeg, or a Nix store closure. As with most native Linux programs, i
 uses the host's glibc, ALSA, graphics driver/OpenGL, and X11 or Wayland libraries.
 It is not a fully static executable. Ubuntu/Pop!_OS desktop installations provide
 these runtime libraries. Minimal installations may need `libasound2`,
-`libxkbcommon0`, `libegl1`, `libgl1`, and the relevant X11/Wayland libraries.
+`libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1`, and the relevant
+X11/Wayland libraries.
 
 ## Connect and listen
 
@@ -97,7 +98,8 @@ Install stable Rust and the native build dependencies. On Ubuntu (Bash):
 
 ```bash
 sudo apt-get install build-essential pkg-config libasound2-dev libx11-dev \
-  libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+  libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 \
+  libwayland-dev libgl1-mesa-dev
 cargo build --locked --release
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
