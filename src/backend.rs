@@ -1,7 +1,7 @@
 use crate::{
     api::{Api, DeviceLogin, LoginPoll, Search},
     audio::Player,
-    model::{Playlist, Track},
+    model::{Home, LibraryEntry, RadioSeed, Track},
     store,
 };
 use std::{
@@ -11,6 +11,9 @@ use std::{
 use tokio::sync::mpsc as async_mpsc;
 
 pub enum Request {
+    BeginPkce,
+    FinishPkce(String),
+    CancelPkce,
     Login,
     Logout,
     Search {
@@ -21,7 +24,20 @@ pub enum Request {
         generation: u64,
         offset: usize,
     },
-    Playlists,
+    Home {
+        generation: u64,
+    },
+    Folder {
+        id: String,
+    },
+    Mix {
+        generation: u64,
+        id: String,
+    },
+    Radio {
+        generation: u64,
+        seed: RadioSeed,
+    },
     Collection {
         generation: u64,
         kind: String,
@@ -36,6 +52,8 @@ pub enum Request {
 }
 
 pub enum Event {
+    PkceReady(String),
+    AuthKind(bool),
     Session(Option<String>),
     Login {
         url: String,
@@ -50,7 +68,22 @@ pub enum Event {
         tracks: Vec<Track>,
         append: bool,
     },
-    Playlists(Vec<Playlist>),
+    Home {
+        generation: u64,
+        home: Home,
+    },
+    Folder {
+        id: String,
+        entries: Vec<LibraryEntry>,
+    },
+    FolderError {
+        id: String,
+        message: String,
+    },
+    Radio {
+        generation: u64,
+        tracks: Vec<Track>,
+    },
     Playing {
         generation: u64,
         quality: String,
@@ -120,10 +153,14 @@ impl Backend {
                 }
                 if api.session.is_some() {
                     match api.identify().await {
-                        Ok(()) => events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone()))),
+                        Ok(()) => {
+                            events.send(Event::AuthKind(api.session.as_ref().is_some_and(|s| s.pkce)));
+                            events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
+                        },
                         Err(e) => events.send(Event::Error(e.to_string())),
                     }
                 } else { events.send(Event::Session(None)); }
+                let mut pkce = None;
                 let mut login: Option<(DeviceLogin, Instant, Instant)> = None;
                 let mut ticker = tokio::time::interval(Duration::from_secs(1));
                 loop {
@@ -132,12 +169,27 @@ impl Backend {
                             let Some(request) = request else { break; };
                             let request_generation = match &request {
                                 Request::Search { generation, .. } | Request::Favorites { generation, .. } |
-                                Request::Collection { generation, .. } => Some(*generation),
+                                Request::Collection { generation, .. } | Request::Home { generation } |
+                                Request::Mix { generation, .. } | Request::Radio { generation, .. } => Some(*generation),
                                 _ => None,
                             };
+                            let folder_id = match &request { Request::Folder { id } => Some(id.clone()), _ => None };
                             let playback_generation = match &request { Request::Play { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
                                 match request {
+                                    Request::BeginPkce => {
+                                        let p = crate::auth::Pkce::new();
+                                        events.send(Event::PkceReady(p.url()));
+                                        pkce = Some(p);
+                                    }
+                                    Request::CancelPkce => pkce = None,
+                                    Request::FinishPkce(redirect) => {
+                                        let p = pkce.as_ref().ok_or_else(|| anyhow::anyhow!("Start lossless sign-in first"))?;
+                                        api.finish_pkce(p, &redirect).await?;
+                                        pkce = None;
+                                        events.send(Event::AuthKind(true));
+                                        events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
+                                    }
                                     Request::Login => {
                                         let device = api.begin_login().await?;
                                         let url = login_url(&device.verification_uri_complete)?;
@@ -147,6 +199,7 @@ impl Backend {
                                     }
                                     Request::Logout => {
                                         login = None;
+                                        pkce = None;
                                         audio.stop();
                                         store::clear()?;
                                         api.session = None;
@@ -160,7 +213,19 @@ impl Backend {
                                         let tracks = api.favorites(offset).await?;
                                         events.send(Event::Tracks { generation, tracks, append: offset > 0 });
                                     }
-                                    Request::Playlists => events.send(Event::Playlists(api.playlists().await?)),
+                                    Request::Home { generation } => events.send(Event::Home { generation, home: api.home().await? }),
+                                    Request::Folder { id } => {
+                                        let entries = api.folder(&id).await?;
+                                        events.send(Event::Folder { id, entries });
+                                    }
+                                    Request::Mix { generation, id } => {
+                                        let tracks = api.mix_tracks(&id).await?;
+                                        events.send(Event::Tracks { generation, tracks, append: false });
+                                    }
+                                    Request::Radio { generation, seed } => {
+                                        let tracks = api.radio(&seed).await?;
+                                        events.send(Event::Radio { generation, tracks });
+                                    }
                                     Request::Collection { generation, kind, id, offset } => {
                                         let tracks = api.collection(&kind, &id, offset).await?;
                                         events.send(Event::Tracks { generation, tracks, append: offset > 0 });
@@ -171,7 +236,7 @@ impl Backend {
                                         let audio = audio.clone();
                                         let events = events.clone();
                                         tokio::spawn(async move {
-                                            if let Err(e) = audio.load(generation, stream.url, stream.quality).await {
+                                            if let Err(e) = audio.load(generation, stream).await {
                                                 events.send(Event::PlaybackError { generation, message: e.to_string() });
                                             }
                                         });
@@ -180,7 +245,9 @@ impl Backend {
                                 Ok(())
                             }.await;
                             if let Err(e) = result {
-                                events.send(if let Some(generation) = request_generation {
+                                events.send(if let Some(id) = folder_id {
+                                    Event::FolderError { id, message: e.to_string() }
+                                } else if let Some(generation) = request_generation {
                                     Event::RequestError { generation, message: e.to_string() }
                                 } else if let Some(generation) = playback_generation {
                                     Event::PlaybackError { generation, message: e.to_string() }
@@ -198,6 +265,7 @@ impl Backend {
                             match api.poll_login(&device.device_code).await {
                                 Ok(LoginPoll::Complete) => {
                                     login = None;
+                                    events.send(Event::AuthKind(false));
                                     events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
                                 }
                                 Ok(LoginPoll::Pending) => *next = Instant::now() + Duration::from_secs(device.interval.max(1)),

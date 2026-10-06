@@ -10,6 +10,8 @@ pub struct Session {
     pub expires_at: u64,
     pub user_id: u64,
     pub country: String,
+    #[serde(default)]
+    pub pkce: bool,
 }
 
 pub fn now() -> u64 {

@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct Artist {
     #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
     pub name: String,
 }
 
@@ -47,6 +51,64 @@ pub struct Playlist {
     pub title: String,
     #[serde(default)]
     pub number_of_tracks: u64,
+}
+
+#[derive(Clone, Debug)]
+pub enum LibraryEntry {
+    Folder {
+        id: String,
+        name: String,
+        count: u64,
+    },
+    Playlist(Playlist),
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mix {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub sub_title: String,
+    #[serde(default)]
+    pub mix_type: String,
+    #[serde(default)]
+    pub images: serde_json::Value,
+}
+impl Mix {
+    pub fn cover_url(&self) -> Option<String> {
+        self.images["MEDIUM"]["url"]
+            .as_str()
+            .or_else(|| self.images["SMALL"]["url"].as_str())
+            .map(str::to_owned)
+    }
+}
+
+#[derive(Default)]
+pub struct Home {
+    pub daily: Option<Mix>,
+    pub mixes: Vec<Mix>,
+    pub tracks: Vec<Track>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RadioSeed {
+    Track { id: u64, title: String },
+    Artist { id: u64, name: String },
+}
+impl RadioSeed {
+    pub fn title(&self) -> String {
+        match self {
+            Self::Track { title, .. } => format!("{title} · Track Radio"),
+            Self::Artist { name, .. } => format!("{name} · Artist Radio"),
+        }
+    }
+    pub fn path(&self) -> String {
+        match self {
+            Self::Track { id, .. } => format!("tracks/{id}/radio"),
+            Self::Artist { id, .. } => format!("artists/{id}/radio"),
+        }
+    }
 }
 
 pub fn cover_url(id: Option<&str>, size: u32) -> Option<String> {

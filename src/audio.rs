@@ -1,6 +1,7 @@
+use crate::api::{Stream, StreamSource};
 use crate::backend::{Event, Events};
-use anyhow::{Context, Result};
-use rodio::{Decoder, OutputStreamBuilder, Sink};
+use anyhow::Result;
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use std::{
     sync::{
         Arc,
@@ -14,7 +15,7 @@ use stream_download::{Settings, StreamDownload, storage::temp::TempStorageProvid
 type AudioDecoder = Decoder<StreamDownload<TempStorageProvider>>;
 
 enum Command {
-    Load(u64, AudioDecoder, String),
+    Load(u64, Box<dyn Source<Item = f32> + Send>, String),
     Pause(bool),
     Seek(u64),
     Volume(f32),
@@ -128,26 +129,32 @@ impl Player {
         let _ = self.tx.send(Command::Seek(seconds));
     }
 
-    pub async fn load(&self, id: u64, url: String, quality: String) -> Result<()> {
+    pub async fn load(&self, id: u64, stream: Stream) -> Result<()> {
         if !self.current(id) {
             return Ok(());
         }
-        let reader = StreamDownload::new_http(
-            url.parse()?,
-            TempStorageProvider::new(),
-            Settings::default().prefetch_bytes(128 * 1024),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Unable to buffer the TIDAL stream. Check your connection and try again."
-            )
-        })?;
-        let decoder = decode(reader).await?;
+        let quality = stream.label();
+        let decoder: Box<dyn Source<Item = f32> + Send> = match stream.source {
+            StreamSource::Direct(url) => {
+                let reader = StreamDownload::new_http(
+                    url.parse()?,
+                    TempStorageProvider::new(),
+                    Settings::default().prefetch_bytes(128 * 1024),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "Unable to buffer the TIDAL stream. Check your connection and try again."
+                    )
+                })?;
+                Box::new(decode(reader).await?)
+            }
+            StreamSource::Dash(manifest) => Box::new(crate::dash::source(manifest).await?),
+        };
         if self.current(id) {
             self.tx
                 .send(Command::Load(id, decoder, quality))
-                .context("Audio output is unavailable")?;
+                .map_err(|_| anyhow::anyhow!("Audio output is unavailable"))?;
         }
         Ok(())
     }

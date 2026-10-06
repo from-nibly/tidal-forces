@@ -2,12 +2,11 @@
 
 **Your TIDAL library. A native Rust desktop player. No browser engine.**
 
-Tidal Forces uses TIDAL-inspired dark surfaces, large typography, album artwork,
-a collection sidebar and a persistent player. Its architecture takes cues from
+TIDAL-inspired dark surfaces, album artwork, nested playlist folders, Daily
+Discovery, personal mixes and a persistent player. Inspired by
 [Spotifast](https://spotifast.rocks) ([source](https://github.com/crmne/spotifast)):
-Rust + egui, background network work, native decoding, event-driven repainting,
-and a single executable. This is an independent implementation, not a Spotify
-client with its branding replaced.
+Rust + egui, background network work, native audio decoding, event-driven
+repainting, and a single executable. This is an independent implementation.
 
 ## Download and install
 
@@ -21,80 +20,131 @@ chmod +x tidal-forces-linux-x86_64
 ./tidal-forces-linux-x86_64 --install
 ```
 
-Open **Tidal Forces** from your desktop's application launcher. The installer
-copies the running executable to `~/.local/bin/tidal-forces` and creates an XDG
-desktop entry and an embedded SVG icon under your user data directory. No sudo
-is needed. Run a newer download with `--install` to update it (restart the app).
+Open **Tidal Forces** from the desktop application launcher. Installation copies
+the running executable to `~/.local/bin/tidal-forces` and registers an XDG desktop
+entry and embedded icon. No sudo is needed. Run a new download with `--install`
+and restart the app to update.
 
-This is **one executable**, not an AppImage, Electron bundle, script calling
-Python/mpv/ffmpeg, or a Nix store closure. As with most native Linux programs, it
-uses the host's glibc, ALSA, graphics driver/OpenGL, and X11 or Wayland libraries.
-It is not a fully static executable. Ubuntu/Pop!_OS desktop installations provide
-these runtime libraries. Minimal installations may need `libasound2`,
-`libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1`, and the relevant
-X11/Wayland libraries.
+This is one executable, not Electron, an AppImage, a webview or a wrapper around
+Python/mpv/ffmpeg. It uses standard Linux runtime libraries: glibc, ALSA, your
+graphics driver/OpenGL, and X11 or Wayland. Minimal systems may need
+`libasound2`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, and `libgl1`.
+A desktop session D-Bus is needed for system media controls. The executable is
+not fully static and does not depend on a Nix store closure.
 
-## Connect and listen
+## Lossless sign-in
 
-1. Click **Connect with TIDAL**. Authorize the device on TIDAL's website in your
-   browser. Your password is never handled by this app.
-2. Open your collection or playlists, or search for tracks and albums.
-3. Double-click a track, click an album cover then **Play all**, or use **+** to
-   add a track to the queue.
-4. Use the player controls to pause, seek, change volume, skip, shuffle upcoming
-   tracks or repeat the queue. Change streaming quality in **Settings**.
+1. Click **Connect with TIDAL**, or **Settings → Enable lossless sign-in** when
+   upgrading an existing AAC-only device session.
+2. Sign in on TIDAL's website in the browser opened for you.
+3. The final redirected page may say **Oops**. Copy its complete address from the
+   address bar and paste it into the app's **Connect lossless playback** dialog.
+   Do not share this address in chat: it contains a one-time authorization code.
+4. Click **Finish lossless sign-in**. Your old session stays connected until the
+   new authorization succeeds.
 
-- `Space`: play / pause (except while typing)
+The app uses OAuth authorization-code + PKCE, checks the redirect host/path and
+state, and expires pending authorizations after ten minutes. Your password never
+passes through this app. Refresh tokens retain their authentication type across
+restarts. The fixed native-client redirect requires the copy/paste step; there
+is no embedded browser or browser-cookie extraction.
+
+### Actual lossless streaming
+
+The lossless connection supports **unencrypted DASH FLAC** and direct BTS FLAC
+streams. Native decoding uses rodio/Symphonia. DASH initialization and media
+fragments are fetched in the background; only the current fragment and two ahead
+are retained. Playback does not wait for the whole track. Seeking selects and
+buffers the appropriate fragment and decodes to the requested sample offset.
+The player reports TIDAL's returned codec, bit depth and sample rate. Live
+16-bit / 44.1 kHz FLAC playback and seeking have been verified with a subscription.
+
+**There is no silent lossy fallback.** If TIDAL offers only AAC/LOW for a track,
+lossless mode reports that and does not play it as “lossless.” Some tracks can
+be restricted or unavailable at the requested quality for this client/account.
+The player does not claim exclusive-mode, bit-perfect output or automatic device
+sample-rate switching; the OS mixer may resample audio.
+
+**Compatibility sign-in** remains available for AAC-only device authorization
+and direct BTS streams. AAC quality choices apply to that connection, not the
+PKCE lossless connection. DASH AAC, encrypted audio/DRM, and live DASH manifests
+are not supported. No subscription bypass, DRM bypass, third-party music proxies
+or external decoder processes are used.
+
+## Browse and listen
+
+- **Home:** your current **My Daily Discovery** tracks and your personal **My
+  Mixes**, fetched from TIDAL—not hardcoded playlists or generic favorites.
+- **Playlist folders:** expandable folders mirror the hierarchy in your TIDAL
+  account, including nested folders. Children load when expanded. Cursor-based
+  pagination fetches every page of each folder. **Refresh** reloads the account
+  hierarchy; the app does not move or rename anything in your account.
+- **My collection:** favorite tracks are still available separately.
+- **Search:** tracks, albums and artists. Click an album or mix to browse it.
+- Double-click a track or choose **Play all**. Use **+** to append to the queue.
+- **Radio:** track and artist radio are available from track-row **...** menus
+  and right-click menus, including search, album, playlist, mix and discovery
+  track lists. The current-player **...** menu/cover and queue right-click menus
+  offer the same actions. Artist search results offer **Start artist radio**.
+  These load TIDAL-generated radio tracks and start playback; unavailable radios
+  report an error rather than substituting a locally invented playlist.
+- Pause, seek, volume, next/previous, shuffle upcoming tracks and repeat queue
+  are supported. Closing the window exits.
+
+Collections paginate beyond 100 tracks via **Load more tracks**. Folder contents
+and mix tracks are fully paginated. Search returns up to 50 results per type.
+Radio loads the endpoint's initial set of up to 100 tracks; it is not an infinite
+radio feed. Daily Discovery refreshes when you open or refresh Home.
+
+## Standard desktop media controls
+
+The app exposes **`org.mpris.MediaPlayer2.tidalforces`** on the session bus,
+including playback state, metadata, artwork, position, volume and transport
+commands. System play/pause works even when this window is unfocused. No global
+key grabs or replacement desktop bindings are installed.
+
+- Media play/pause, next and previous: through your desktop's normal MPRIS routing
+- `Space`: play / pause inside the app, except while typing
 - `Ctrl+K`: search
 - `Ctrl+Left` / `Ctrl+Right`: previous / next
-- **Load more tracks** paginates collections beyond the first 100 tracks.
-- Search returns up to 50 tracks/albums; the playlist sidebar loads up to 100
-  playlists. These bounds are explicit, not a claim of complete library sync.
 
-### Account and playback limitations — please read
+For testing (Nushell):
 
-This is an **unofficial** client. It uses the account-authenticated native TIDAL
-API and public compatibility-client identifiers also used by
-[python-tidal](https://github.com/tamland/python-tidal), not TIDAL's public
-preview-only developer integration. A paid subscription and TIDAL's permission
-for that client/track/region are required. TIDAL can change or revoke this access.
-A successful sign-in alone does **not** guarantee full playback.
+```nu
+playerctl --player=tidalforces play-pause
+playerctl --player=tidalforces status
+```
 
-Supported: unencrypted TIDAL BTS manifests containing direct HTTPS streams,
-including FLAC and AAC decoded natively with Symphonia/rodio. Streaming starts
-with a small prebuffer; the rest downloads into an ephemeral temporary file.
-Seeking is handled by the native decoder and streaming cache.
+`playerctl` is an optional diagnostic/controller, **not an app dependency**.
+When several players are registered (for example the old TIDAL client or Firefox),
+your desktop/controller chooses which one receives a generic media-key command.
+Closing a competing player removes it from that selection. Tidal Forces does
+not take over other players or change your shortcut routing.
 
-**No DRM bypass, encrypted-stream decryption, third-party streaming proxies,
-offline downloads, or subscription bypass.** DASH manifests are currently
-unsupported. If a track returns DASH, try **High** quality. Unsupported playback
-is reported as an error, not silently substituted with a preview. The player
-shows the actual quality returned by TIDAL (which may be **HIGH/AAC even when
-LOSSLESS is requested** with this compatibility client); it does not promise hi-res,
-exclusive-mode, bit-perfect playback, or gapless transitions.
+## Account access and privacy
 
-This first version does not include playlist editing, lyrics, recommendations,
-TIDAL Connect, system media-key/MPRIS integration, a tray icon, or a built-in
-updater. It plays on the default OS audio device. Closing the window exits.
+This is an **unofficial** client using TIDAL's authenticated native API and public
+compatibility-client identifiers also used by
+[python-tidal](https://github.com/tamland/python-tidal). A paid subscription and
+TIDAL's authorization for the client/track/region are required. TIDAL can change
+or revoke access; a successful login does not guarantee every track or format.
 
-## Privacy
+No telemetry. Session tokens stay in `~/.config/tidal-forces/session.json` (or
+its XDG equivalent), with a `0700` directory and atomically-written `0600` file.
+They are **not encrypted at rest**; processes running as your user can read them.
+**Settings → Sign out** stops playback and removes the session file. Only TIDAL's
+APIs, image servers and provided audio CDN URLs are contacted. Tokens and music
+are never included in source control or release artifacts.
 
-No telemetry. Session tokens stay in
-`~/.config/tidal-forces/session.json` (or the XDG config directory). The directory
-is mode `0700` and the atomically-written token file is mode `0600`. Tokens are
-**not encrypted at rest**; local processes running as your user can read them.
-Use **Settings → Sign out** to stop playback and remove the saved session.
-The audio cache uses temporary files that are removed when their streams close;
-abnormal process termination may leave OS temporary files behind.
-
-Only TIDAL's APIs, artwork servers and stream CDN URLs are contacted. No audio
-or tokens are committed to GitHub or included in release artifacts. Developers
-with approved compatible credentials can override `TIDAL_CLIENT_ID` and
-`TIDAL_CLIENT_SECRET` at runtime. Do not commit private credentials.
+DASH fragments are held in a bounded memory buffer. Direct BTS streams use
+anonymous temporary-file caching; normal shutdown removes those files, while
+abnormal termination may leave OS temporary files behind. Approved compatible
+device credentials can be supplied with `TIDAL_CLIENT_ID` and
+`TIDAL_CLIENT_SECRET`; never commit private credentials.
 
 ## Build and verify
 
-Install stable Rust and the native build dependencies. On Ubuntu (Bash):
+Install stable Rust and native dependencies. On Ubuntu (Bash):
 
 ```bash
 sudo apt-get install build-essential pkg-config libasound2-dev libx11-dev \
@@ -112,42 +162,45 @@ Developer checks (Nushell):
 ./target/release/tidal-forces --smoke-ui
 ./target/release/tidal-forces --audio-test
 ./target/release/tidal-forces --check-account
-./target/release/tidal-forces --verify-playback 12345678
+./target/release/tidal-forces --check-account --refresh
+./target/release/tidal-forces --verify-playback 257836968 --seek
 ```
 
-The last two require a signed-in account; replace the example ID with a playable
-TIDAL track. `--audio-test` plays a quiet 150 ms test tone. `--verify-playback`
-requires at least three seconds of actual decoder/audio progress before success.
-CI cannot certify account-dependent playback without a real subscriber login.
+Account checks require sign-in. Playback verification checks nine seconds of
+lossless audio across segment boundaries; `--seek` also exercises pause/resume,
+a seek to 45 seconds, and subsequent playback (use a track longer than 50 seconds).
+The audio test plays a quiet 150 ms tone. Automated fixtures are synthesized
+locally, not TIDAL music. Tests verify FLAC segment continuity sample-for-sample,
+seeking across buffer eviction, bounded caching, manifest rejection, OAuth state,
+folder parsing, queue behavior and private credential persistence.
 
 ## Release automation
 
-Every push to `master` runs formatting, Clippy, tests, an optimized release build
-and a native-window smoke test under Xvfb in GitHub Actions. Successful pushes
-publish a commit-specific GitHub Release with the **raw single executable** and
-SHA-256 checksum. Reruns replace that commit's assets; builds for different
-commits do not cancel each other. Pull requests run the same checks but never
-publish. `Cargo.lock` is committed and all builds use `--locked`.
+Every push to `master` runs formatting, Clippy, tests, an optimized build and a
+native-window smoke test under Xvfb in GitHub Actions. Successful pushes publish
+a commit-specific Release containing the **raw single executable** and a SHA-256
+checksum. Different master pushes do not cancel each other. Reruns replace the
+same commit's assets; pull requests run checks without publishing. `Cargo.lock`
+is committed and all CI builds use `--locked`.
 
-## Implementation
+## Implementation and acknowledgements
 
-- `src/ui.rs`: native egui interface; no blocking API or decoder work on the UI
-  thread. Repaints are driven by input and backend events, not a render loop.
-- `src/backend.rs`: bounded command channel, OAuth device polling and catalog
-  worker; generation IDs discard stale search and playback responses.
-- `src/api.rs`: authenticated requests, token refresh and manifest validation.
-- `src/audio.rs`: native audio-owner thread and background disk-backed HTTP
-  stream buffering. Network/decoder errors surface in the interface.
-- `src/store.rs`: atomic private credential persistence.
-- `src/install.rs`: self-installing desktop integration with embedded assets.
+- `ui.rs`: native egui rendering; folders, mixes, discovery and radio controls.
+- `api.rs` / `auth.rs`: catalog requests, pagination, authenticated manifests,
+  device sign-in, PKCE and session refresh.
+- `backend.rs`: bounded command channel and generation-guarded background work.
+- `audio.rs` / `dash.rs`: native audio, segmented lossless buffering and seeking.
+- `desktop.rs`: standard MPRIS integration via souvlaki's Rust/zbus backend.
+- `store.rs` / `install.rs`: private atomic sessions and desktop installation.
 
-## Acknowledgements
+Inspired by Spotifast's native-first architecture; API compatibility researched
+against python-tidal. Built with egui, rodio/Symphonia, stream-download,
+reqwest/rustls, Tokio, roxmltree, souvlaki/zbus and Inter fonts. Inter is by Rasmus
+Andersson, under SIL OFL (`assets/fonts/OFL.txt`). No Spotifast source or artwork
+is bundled.
 
-Inspired by Spotifast's native-first architecture. API compatibility researched
-against python-tidal. Built with egui/eframe, rodio/Symphonia, stream-download,
-reqwest/rustls and Tokio. The embedded Inter fonts are by Rasmus Andersson,
-licensed under the SIL Open Font License (see `assets/fonts/OFL.txt`). No
-Spotifast source or artwork is bundled.
+Not yet included: playlist/folder editing, lyrics, offline downloads, TIDAL
+Connect, infinite radio, gapless track transitions, tray icon or built-in updater.
 
 MIT licensed. Not affiliated with or endorsed by TIDAL. TIDAL is a trademark of
-its respective owner. The app uses its own original icon and name.
+its respective owner; this app uses its own name and original icon.

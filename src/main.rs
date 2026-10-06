@@ -2,7 +2,10 @@ mod api;
 mod audio;
 #[cfg(test)]
 mod audio_tests;
+mod auth;
 mod backend;
+mod dash;
+mod desktop;
 mod install;
 mod model;
 mod queue;
@@ -31,13 +34,16 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Some("--audio-test") => return audio::audio_test(),
-        Some("--check-account") => return check_account(),
+        Some("--check-account") => return check_account(args.iter().any(|a| a == "--refresh")),
         Some("--verify-playback") => {
-            return verify_playback(args.get(1).context("Supply a TIDAL track ID")?.parse()?);
+            return verify_playback(
+                args.get(1).context("Supply a TIDAL track ID")?.parse()?,
+                args.iter().any(|a| a == "--seek"),
+            );
         }
         Some("--help") => {
             println!(
-                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Play a TIDAL track for 3 seconds to verify streaming\n  --version           Show version\n\nStart without arguments to open the player."
+                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of lossless audio; --seek also tests pause and seek\n  --version           Show version\n\nStart without arguments to open the player."
             );
             return Ok(());
         }
@@ -84,10 +90,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn check_account() -> Result<()> {
+fn check_account(refresh: bool) -> Result<()> {
     tokio::runtime::Runtime::new()?.block_on(async {
         let mut api = api::Api::new()?;
         api.session = store::load()?;
+        if refresh {
+            api.session.as_mut().context("Sign in first")?.expires_at = 0;
+        }
         api.identify().await?;
         println!(
             "Authenticated account in {}",
@@ -97,18 +106,53 @@ fn check_account() -> Result<()> {
             "Favorite tracks (first page): {}",
             api.favorites(0).await?.len()
         );
-        println!("Playlists (first page): {}", api.playlists().await?.len());
+        let folders = api.folder("root").await?;
+        println!("Root folder entries: {}", folders.len());
+        if let Some(model::LibraryEntry::Folder { id, .. }) = folders
+            .iter()
+            .find(|e| matches!(e, model::LibraryEntry::Folder { .. }))
+        {
+            println!("First folder contents: {}", api.folder(id).await?.len());
+        }
+        let home = api.home().await?;
+        println!(
+            "Personal mixes: {}; Daily Discovery tracks: {}",
+            home.mixes.len(),
+            home.tracks.len()
+        );
         let results = api.search("Massive Attack Teardrop").await?;
         println!(
             "Search returned {} tracks and {} albums",
             results.tracks.len(),
             results.albums.len()
         );
+        if let Some(track) = results.tracks.first() {
+            println!(
+                "Track radio: {} tracks",
+                api.radio(&model::RadioSeed::Track {
+                    id: track.id,
+                    title: track.title.clone()
+                })
+                .await?
+                .len()
+            );
+            if track.artist.id != 0 {
+                println!(
+                    "Artist radio: {} tracks",
+                    api.radio(&model::RadioSeed::Artist {
+                        id: track.artist.id,
+                        name: track.artist.name.clone()
+                    })
+                    .await?
+                    .len()
+                );
+            }
+        }
         Ok(())
     })
 }
 
-fn verify_playback(id: u64) -> Result<()> {
+fn verify_playback(id: u64, seek: bool) -> Result<()> {
     use backend::{Backend, Event, Request};
     use std::time::{Duration, Instant};
     let backend = Backend::new(eframe::egui::Context::default());
@@ -119,14 +163,33 @@ fn verify_playback(id: u64) -> Result<()> {
         quality: "LOSSLESS".into(),
     })?;
     let start = Instant::now();
+    let mut seeking = false;
     while start.elapsed() < Duration::from_secs(90) {
         if let Ok(event) = backend.rx.recv_timeout(Duration::from_secs(1)) {
             match event {
                 Event::Playing { quality, .. } => println!("Decoder started: {quality}"),
-                Event::Position { seconds, .. } if seconds >= 3 => {
+                Event::Position { seconds, .. } if !seeking && seconds >= 9 => {
+                    if seek {
+                        backend.player.pause(true);
+                        std::thread::sleep(Duration::from_millis(500));
+                        backend.player.seek(45);
+                        backend.player.pause(false);
+                        seeking = true;
+                        println!(
+                            "Nine seconds across segment boundaries passed; testing seek to 45s."
+                        );
+                    } else {
+                        backend.player.stop();
+                        println!(
+                            "Verified authenticated lossless playback across segment boundaries for {seconds}s."
+                        );
+                        return Ok(());
+                    }
+                }
+                Event::Position { seconds, .. } if seeking && seconds >= 50 => {
                     backend.player.stop();
                     println!(
-                        "Verified authenticated TIDAL streaming, decoding and audio output for {seconds}s."
+                        "Verified continuous lossless playback, pause/resume, seek, and playback after seeking."
                     );
                     return Ok(());
                 }

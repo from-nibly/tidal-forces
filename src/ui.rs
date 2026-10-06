@@ -1,9 +1,11 @@
 use crate::{
     backend::{Backend, Event, Request},
-    model::{Album, Playlist, Track, cover_url, time},
+    desktop::{DesktopControls, MediaControlEvent},
+    model::{Album, Artist, LibraryEntry, Mix, RadioSeed, Track, cover_url, time},
     queue::Queue,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
+use std::collections::{HashMap, HashSet};
 
 const BG: Color32 = Color32::from_rgb(12, 13, 15);
 const PANEL: Color32 = Color32::from_rgb(18, 19, 22);
@@ -16,6 +18,11 @@ enum Page {
     Home,
     Search,
     Favorites,
+    Mix {
+        id: String,
+        title: String,
+    },
+    Radio(RadioSeed),
     Collection {
         kind: String,
         id: String,
@@ -30,12 +37,22 @@ pub struct App {
     country: String,
     login: Option<(String, String)>,
     signing_in: bool,
+    pkce_url: Option<String>,
+    pkce_redirect: String,
+    pkce_wait: bool,
+    auth_pkce: bool,
     page: Page,
     query: String,
     focus_search: bool,
     tracks: Vec<Track>,
     albums: Vec<Album>,
-    playlists: Vec<Playlist>,
+    artists: Vec<Artist>,
+    mixes: Vec<Mix>,
+    daily: Option<Mix>,
+    folders: HashMap<String, Vec<LibraryEntry>>,
+    expanded: HashSet<String>,
+    folder_pending: HashSet<String>,
+    media: Option<DesktopControls>,
     generation: u64,
     loading: bool,
     more: bool,
@@ -101,6 +118,11 @@ impl App {
             );
         });
         egui_extras::install_image_loaders(&cc.egui_ctx);
+        let media_result = DesktopControls::new(cc.egui_ctx.clone());
+        let media_error = media_result
+            .as_ref()
+            .err()
+            .map(|e| format!("Desktop media controls unavailable: {e}"));
         Self {
             backend: Backend::new(cc.egui_ctx.clone()),
             screenshot,
@@ -108,16 +130,26 @@ impl App {
             country: String::new(),
             login: None,
             signing_in: false,
+            pkce_url: None,
+            pkce_redirect: String::new(),
+            pkce_wait: false,
+            auth_pkce: false,
             page: Page::Home,
             query: String::new(),
             focus_search: false,
             tracks: vec![],
             albums: vec![],
-            playlists: vec![],
+            artists: vec![],
+            mixes: vec![],
+            daily: None,
+            folders: HashMap::new(),
+            expanded: HashSet::new(),
+            folder_pending: HashSet::new(),
+            media: media_result.ok(),
             generation: 0,
             loading: false,
             more: false,
-            error: None,
+            error: media_error,
             audio_available: true,
             queue: Queue::default(),
             queue_open: false,
@@ -147,6 +179,7 @@ impl App {
         self.generation += 1;
         self.tracks.clear();
         self.albums.clear();
+        self.artists.clear();
         self.more = false;
         if !self.connected {
             return;
@@ -180,7 +213,18 @@ impl App {
     fn load_page(&mut self, offset: usize) {
         self.loading = true;
         match &self.page {
-            Page::Home | Page::Favorites => self.send(Request::Favorites {
+            Page::Home => self.send(Request::Home {
+                generation: self.generation,
+            }),
+            Page::Mix { id, .. } => self.send(Request::Mix {
+                generation: self.generation,
+                id: id.clone(),
+            }),
+            Page::Radio(seed) => self.send(Request::Radio {
+                generation: self.generation,
+                seed: seed.clone(),
+            }),
+            Page::Favorites => self.send(Request::Favorites {
                 generation: self.generation,
                 offset,
             }),
@@ -220,7 +264,14 @@ impl App {
     }
 
     fn toggle(&mut self) {
-        if self.queue.current().is_none() || self.buffering {
+        if self.queue.current().is_none() {
+            if !self.tracks.is_empty() {
+                self.play_track(0);
+            }
+            return;
+        }
+        if self.buffering {
+            self.paused = !self.paused;
             return;
         }
         if self.ended || self.actual_quality.is_empty() {
@@ -261,18 +312,40 @@ impl App {
     fn events(&mut self) {
         while let Ok(event) = self.backend.rx.try_recv() {
             match event {
+                Event::PkceReady(url) => {
+                    self.pkce_wait = false;
+                    self.signing_in = false;
+                    self.pkce_url = Some(url.clone());
+                    self.pkce_redirect.clear();
+                    if webbrowser::open(&url).is_err() {
+                        self.error =
+                            Some("Open the sign-in link from the lossless sign-in window.".into());
+                    }
+                }
+                Event::AuthKind(pkce) => {
+                    self.auth_pkce = pkce;
+                    self.quality = if pkce { "LOSSLESS" } else { "HIGH" }.into();
+                }
                 Event::Session(country) => {
+                    self.pkce_url = None;
+                    self.pkce_redirect.clear();
+                    self.pkce_wait = false;
                     self.connected = country.is_some();
                     self.country = country.unwrap_or_default();
                     self.login = None;
                     self.signing_in = false;
+                    self.folders.clear();
+                    self.expanded.clear();
+                    self.folder_pending.clear();
                     if self.connected {
-                        self.send(Request::Playlists);
+                        self.request_folder("root");
                         self.navigate(Page::Home);
                     } else {
                         self.tracks.clear();
                         self.albums.clear();
-                        self.playlists.clear();
+                        self.artists.clear();
+                        self.mixes.clear();
+                        self.daily = None;
                         self.queue = Queue::default();
                         self.paused = true;
                         self.buffering = false;
@@ -290,6 +363,7 @@ impl App {
                 Event::Search { generation, data } if generation == self.generation => {
                     self.tracks = data.tracks;
                     self.albums = data.albums;
+                    self.artists = data.artists;
                     self.loading = false;
                 }
                 Event::Tracks {
@@ -297,7 +371,8 @@ impl App {
                     tracks,
                     append,
                 } if generation == self.generation => {
-                    self.more = tracks.len() == 100;
+                    self.more = tracks.len() == 100
+                        && matches!(self.page, Page::Favorites | Page::Collection { .. });
                     if append {
                         self.tracks.extend(tracks);
                     } else {
@@ -305,13 +380,33 @@ impl App {
                     }
                     self.loading = false;
                 }
-                Event::Playlists(playlists) => self.playlists = playlists,
+                Event::Home { generation, home } if generation == self.generation => {
+                    self.daily = home.daily;
+                    self.mixes = home.mixes;
+                    self.tracks = home.tracks;
+                    self.loading = false;
+                    self.more = false;
+                }
+                Event::Folder { id, entries } => {
+                    self.folder_pending.remove(&id);
+                    self.folders.insert(id, entries);
+                }
+                Event::FolderError { id, message } => {
+                    self.folder_pending.remove(&id);
+                    self.error = Some(message);
+                }
+                Event::Radio { generation, tracks } if generation == self.generation => {
+                    self.tracks = tracks;
+                    self.loading = false;
+                    self.more = false;
+                    self.play_track(0);
+                }
                 Event::Playing {
                     generation,
                     quality,
                 } if generation == self.play_generation => {
                     self.buffering = false;
-                    self.paused = false;
+                    self.backend.player.pause(self.paused);
                     self.actual_quality = quality;
                 }
                 Event::Position {
@@ -355,11 +450,138 @@ impl App {
                     self.error = Some(message);
                 }
                 Event::Error(message) => {
+                    self.pkce_wait = false;
                     self.login = None;
                     self.signing_in = false;
                     self.error = Some(message);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn desktop_events(&mut self, ctx: &egui::Context) {
+        let events: Vec<_> = self
+            .media
+            .as_ref()
+            .map(|m| m.events.try_iter().collect())
+            .unwrap_or_default();
+        for event in events {
+            match event {
+                MediaControlEvent::Toggle => self.toggle(),
+                MediaControlEvent::Play if self.paused => self.toggle(),
+                MediaControlEvent::Pause if !self.paused => self.toggle(),
+                MediaControlEvent::Next => self.next(),
+                MediaControlEvent::Previous => self.previous(),
+                MediaControlEvent::Stop => {
+                    self.play_generation = self.backend.player.reserve();
+                    self.queue = Queue::default();
+                    self.paused = true;
+                    self.buffering = false;
+                    self.position = 0;
+                }
+                MediaControlEvent::SetPosition(p) => self.seek(p.0.as_secs()),
+                MediaControlEvent::SeekBy(direction, duration) => {
+                    let pos = if direction == souvlaki::SeekDirection::Forward {
+                        self.position.saturating_add(duration.as_secs())
+                    } else {
+                        self.position.saturating_sub(duration.as_secs())
+                    };
+                    self.seek(pos);
+                }
+                MediaControlEvent::Seek(direction) => {
+                    self.seek(if direction == souvlaki::SeekDirection::Forward {
+                        self.position.saturating_add(10)
+                    } else {
+                        self.position.saturating_sub(10)
+                    });
+                }
+                MediaControlEvent::SetVolume(v) if v.is_finite() => {
+                    self.volume = v.clamp(0., 1.) as f32;
+                    self.backend.player.volume(self.volume);
+                }
+                MediaControlEvent::Raise => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
+                MediaControlEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                _ => {}
+            }
+        }
+    }
+
+    fn seek(&mut self, seconds: u64) {
+        if self.buffering || self.ended {
+            return;
+        }
+        if let Some(t) = self.queue.current() {
+            self.position = seconds.min(t.duration.saturating_sub(1));
+            self.backend.player.seek(self.position);
+        }
+    }
+
+    fn request_folder(&mut self, id: &str) {
+        if self.folder_pending.insert(id.to_owned()) {
+            self.send(Request::Folder { id: id.to_owned() });
+        }
+    }
+
+    fn folder_tree(&mut self, ui: &mut egui::Ui, id: &str, depth: usize) {
+        if depth > 20 {
+            ui.label("Folder nesting limit reached");
+            return;
+        }
+        let Some(entries) = self.folders.get(id).cloned() else {
+            if self.folder_pending.contains(id) {
+                ui.spinner();
+            } else if ui.small_button("Load folder / retry").clicked() {
+                self.request_folder(id);
+            }
+            return;
+        };
+        if entries.is_empty() {
+            ui.label(RichText::new("Empty folder").size(12.).color(MUTED));
+        }
+        for entry in entries {
+            match entry {
+                LibraryEntry::Folder { id, name, count } => {
+                    let expanded = self.expanded.contains(&id);
+                    if folder_button(ui, &name, expanded)
+                        .on_hover_text(format!("{count} items"))
+                        .clicked()
+                    {
+                        if expanded {
+                            self.expanded.remove(&id);
+                        } else {
+                            self.expanded.insert(id.clone());
+                            if !self.folders.contains_key(&id) {
+                                self.request_folder(&id);
+                            }
+                        }
+                    }
+                    if self.expanded.contains(&id) {
+                        ui.indent(&id, |ui| self.folder_tree(ui, &id, depth + 1));
+                    }
+                }
+                LibraryEntry::Playlist(p) => {
+                    let active = matches!(&self.page, Page::Collection { id, .. } if *id == p.uuid);
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(&p.title).color(if active {
+                                ACCENT
+                            } else {
+                                MUTED
+                            }))
+                            .frame(active)
+                            .min_size(vec2(ui.available_width(), 32.)),
+                        )
+                        .on_hover_text(format!("{} · {} tracks", p.title, p.number_of_tracks))
+                        .clicked()
+                    {
+                        self.navigate(Page::Collection {
+                            kind: "playlists".into(),
+                            id: p.uuid,
+                            title: p.title,
+                        });
+                    }
+                }
             }
         }
     }
@@ -395,49 +617,20 @@ impl App {
                         .strong(),
                 );
                 ui.add_space(6.);
-                let mut selected = None;
                 egui::ScrollArea::vertical()
                     .id_salt("playlists")
                     .max_height((ui.available_height() - 145.).max(50.))
                     .show(ui, |ui| {
-                        for p in &self.playlists {
-                            let active =
-                                matches!(&self.page, Page::Collection { id, .. } if id == &p.uuid);
-                            if ui
-                                .add(
-                                    egui::Button::new(RichText::new(&p.title).color(if active {
-                                        ACCENT
-                                    } else {
-                                        MUTED
-                                    }))
-                                    .frame(false)
-                                    .min_size(vec2(ui.available_width(), 32.)),
-                                )
-                                .on_hover_text(format!("{} tracks", p.number_of_tracks))
-                                .clicked()
-                            {
-                                selected = Some(Page::Collection {
-                                    kind: "playlists".into(),
-                                    id: p.uuid.clone(),
-                                    title: p.title.clone(),
-                                });
-                            }
-                        }
-                        if self.playlists.is_empty() {
+                        if self.connected {
+                            self.folder_tree(ui, "root", 0);
+                        } else {
                             ui.label(
-                                RichText::new(if self.connected {
-                                    "No playlists yet"
-                                } else {
-                                    "Sign in to see your music"
-                                })
-                                .size(12.)
-                                .color(MUTED),
+                                RichText::new("Sign in to see your music")
+                                    .size(12.)
+                                    .color(MUTED),
                             );
                         }
                     });
-                if let Some(page) = selected {
-                    self.navigate(page);
-                }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.label(
                         RichText::new("NATIVE RUST  /  NO BROWSER ENGINE")
@@ -461,6 +654,7 @@ impl App {
     }
 
     fn player_bar(&mut self, ctx: &egui::Context) {
+        let mut radio = None;
         egui::TopBottomPanel::bottom("player")
             .exact_height(112.)
             .frame(
@@ -478,7 +672,8 @@ impl App {
                         |ui| {
                             ui.set_min_size(vec2(width * 0.29, 74.));
                             if let Some(track) = self.queue.current() {
-                                artwork(ui, track.cover_url(80), 60.);
+                                artwork(ui, track.cover_url(80), 60.)
+                                    .context_menu(|ui| radio_menu(ui, track, &mut radio));
                                 ui.vertical(|ui| {
                                     ui.add_space(9.);
                                     ui.add(
@@ -629,6 +824,9 @@ impl App {
                             {
                                 self.queue_open = !self.queue_open;
                             }
+                            if let Some(track) = self.queue.current() {
+                                ui.menu_button("...", |ui| radio_menu(ui, track, &mut radio));
+                            }
                             ui.spacing_mut().slider_width = 75.;
                             if ui
                                 .add(
@@ -645,12 +843,16 @@ impl App {
                     );
                 });
             });
+        if let Some(seed) = radio {
+            self.navigate(Page::Radio(seed));
+        }
     }
 
     fn queue_panel(&mut self, ctx: &egui::Context) {
         if !self.queue_open {
             return;
         }
+        let mut radio = None;
         egui::SidePanel::right("queue")
             .exact_width(250.)
             .resizable(false)
@@ -671,20 +873,19 @@ impl App {
                             continue;
                         }
                         let text = format!("{}\n{}", track.title, track.artist.name);
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(text).size(13.).color(
-                                    if i == self.queue.index {
-                                        ACCENT
-                                    } else {
-                                        Color32::WHITE
-                                    },
-                                ))
-                                .frame(i == self.queue.index)
-                                .min_size(vec2(ui.available_width(), 58.)),
-                            )
-                            .clicked()
-                        {
+                        let response = ui.add(
+                            egui::Button::new(RichText::new(text).size(13.).color(
+                                if i == self.queue.index {
+                                    ACCENT
+                                } else {
+                                    Color32::WHITE
+                                },
+                            ))
+                            .frame(i == self.queue.index)
+                            .min_size(vec2(ui.available_width(), 58.)),
+                        );
+                        response.context_menu(|ui| radio_menu(ui, track, &mut radio));
+                        if response.clicked() {
                             selected = Some(i);
                         }
                     }
@@ -697,6 +898,9 @@ impl App {
                     self.play_current();
                 }
             });
+        if let Some(seed) = radio {
+            self.navigate(Page::Radio(seed));
+        }
     }
 
     fn welcome(&mut self, ui: &mut egui::Ui) {
@@ -771,12 +975,19 @@ impl App {
                         {
                             self.signing_in = true;
                             self.error = None;
-                            self.send(Request::Login);
+                            self.send(Request::BeginPkce);
                         }
                         if self.signing_in {
                             ui.spinner();
                         }
                     });
+                    if ui
+                        .small_button("Compatibility sign-in (AAC only)")
+                        .clicked()
+                    {
+                        self.quality = "HIGH".into();
+                        self.send(Request::Login);
+                    }
                     ui.add_space(8.);
                     ui.label(
                         RichText::new("A TIDAL subscription is required for full-track playback.")
@@ -838,7 +1049,12 @@ impl App {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.connected && ui.small_button("Refresh").clicked() {
+                    self.error = None;
                     self.load_page(0);
+                    self.folders.clear();
+                    self.folder_pending.clear();
+                    self.expanded.clear();
+                    self.request_folder("root");
                 }
                 ui.label(RichText::new("TIDAL FORCES").size(10.).color(ACCENT));
             });
@@ -865,11 +1081,37 @@ impl App {
         }
         match &self.page {
             Page::Home => {
-                ui.label(RichText::new("Welcome back.").size(36.).strong());
+                ui.horizontal(|ui| {
+                    if let Some(daily) = &self.daily {
+                        artwork(ui, daily.cover_url(), 88.);
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(
+                                self.daily
+                                    .as_ref()
+                                    .map_or("Made for you", |m| m.title.as_str()),
+                            )
+                            .size(34.)
+                            .family(egui::FontFamily::Name("heading".into())),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Fresh discoveries and your personal mixes, straight from TIDAL.",
+                            )
+                            .size(15.)
+                            .color(MUTED),
+                        );
+                    });
+                });
+            }
+            Page::Mix { title, .. } => {
+                ui.label(RichText::new(title).size(34.).strong());
+            }
+            Page::Radio(seed) => {
+                ui.label(RichText::new(seed.title()).size(32.).strong());
                 ui.label(
-                    RichText::new("Press play on something you love.")
-                        .size(16.)
-                        .color(MUTED),
+                    RichText::new("Radio selected by TIDAL · Starts automatically").color(MUTED),
                 );
             }
             Page::Favorites => {
@@ -916,6 +1158,33 @@ impl App {
                 ui.label("Loading your music…");
             });
         }
+        if !self.artists.is_empty() {
+            ui.heading("Artists");
+            let mut radio = None;
+            egui::ScrollArea::horizontal()
+                .id_salt("artists")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for artist in &self.artists {
+                            ui.vertical(|ui| {
+                                ui.set_width(140.);
+                                artwork(ui, cover_url(artist.picture.as_deref(), 320), 120.);
+                                ui.add(egui::Label::new(&artist.name).truncate());
+                                if ui.button("Start artist radio").clicked() {
+                                    radio = Some(RadioSeed::Artist {
+                                        id: artist.id,
+                                        name: artist.name.clone(),
+                                    });
+                                }
+                            });
+                        }
+                    });
+                });
+            if let Some(seed) = radio {
+                self.navigate(Page::Radio(seed));
+            }
+            ui.add_space(20.);
+        }
         if !self.albums.is_empty() {
             ui.heading("Albums");
             ui.add_space(8.);
@@ -952,26 +1221,26 @@ impl App {
             }
             ui.add_space(26.);
         }
-        if self.page == Page::Home && !self.tracks.is_empty() {
-            ui.heading("Back to your favorites");
+        if self.page == Page::Home && !self.mixes.is_empty() {
+            ui.heading("My mixes");
             ui.add_space(10.);
-            let mut play = None;
+            let mut selected = None;
             egui::ScrollArea::horizontal()
-                .id_salt("favorites_cards")
+                .id_salt("mix_cards")
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        for (i, t) in self.tracks.iter().take(12).enumerate() {
+                        for mix in self.mixes.iter().filter(|m| m.mix_type != "DISCOVERY_MIX") {
                             ui.vertical(|ui| {
                                 ui.set_width(155.);
-                                if artwork(ui, t.cover_url(320), 155.).clicked() {
-                                    play = Some(i);
+                                if artwork(ui, mix.cover_url(), 155.).clicked() {
+                                    selected = Some(mix.clone());
+                                }
+                                if ui.add(egui::Button::new(&mix.title).frame(false)).clicked() {
+                                    selected = Some(mix.clone());
                                 }
                                 ui.add(
-                                    egui::Label::new(RichText::new(&t.title).strong()).truncate(),
-                                );
-                                ui.add(
                                     egui::Label::new(
-                                        RichText::new(&t.artist.name).color(MUTED).size(12.),
+                                        RichText::new(&mix.sub_title).color(MUTED).size(12.),
                                     )
                                     .truncate(),
                                 );
@@ -979,16 +1248,19 @@ impl App {
                         }
                     });
                 });
-            if let Some(i) = play {
-                self.play_track(i);
+            if let Some(mix) = selected {
+                self.navigate(Page::Mix {
+                    id: mix.id,
+                    title: mix.title,
+                });
             }
             ui.add_space(26.);
         }
         ui.horizontal(|ui| {
-            ui.heading(if matches!(self.page, Page::Home | Page::Favorites) {
-                "Favorite tracks"
-            } else {
-                "Tracks"
+            ui.heading(match self.page {
+                Page::Home => "Today's discovery",
+                Page::Favorites => "Favorite tracks",
+                _ => "Tracks",
             });
             if !self.tracks.is_empty() {
                 ui.label(
@@ -1036,6 +1308,7 @@ impl App {
     fn track_list(&mut self, ui: &mut egui::Ui) {
         let mut play = None;
         let mut add = None;
+        let mut radio = None;
         for (i, t) in self.tracks.iter().enumerate() {
             let playing = self
                 .queue
@@ -1084,6 +1357,7 @@ impl App {
                 },
             );
             row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("...", |ui| radio_menu(ui, t, &mut radio));
                 if ui.small_button("+").on_hover_text("Add to queue").clicked() {
                     add = Some(t.clone());
                 }
@@ -1101,7 +1375,8 @@ impl App {
             if response.double_clicked() && self.audio_available {
                 play = Some(i);
             }
-            response.on_hover_text("Double-click to play · + to queue");
+            response.context_menu(|ui| radio_menu(ui, t, &mut radio));
+            response.on_hover_text("Double-click to play · Right-click for radio · + to queue");
         }
         if let Some(i) = play {
             self.play_track(i);
@@ -1109,6 +1384,39 @@ impl App {
         if let Some(t) = add {
             self.queue.tracks.push(t);
             self.queue_open = true;
+        }
+        if let Some(seed) = radio {
+            self.navigate(Page::Radio(seed));
+        }
+    }
+
+    fn lossless_sign_in(&mut self, ctx: &egui::Context) {
+        let Some(url) = self.pkce_url.clone() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new("Connect lossless playback").open(&mut open).default_width(520.).resizable(false).show(ctx, |ui| {
+            ui.label("1. Sign in on TIDAL's website in the browser opened for you.");
+            ui.label("2. The final page may say ‘Oops’. That is expected. Copy its entire address from the browser address bar.");
+            ui.label("3. Paste that address here, not in chat. The authorization code is single-use.");
+            ui.horizontal(|ui| {
+                if ui.button("Open TIDAL sign-in").clicked() { let _ = webbrowser::open(&url); }
+                if ui.button("Copy sign-in link").clicked() { ctx.copy_text(url.clone()); }
+            });
+            ui.add(egui::TextEdit::singleline(&mut self.pkce_redirect).password(true).desired_width(f32::INFINITY).hint_text("Paste the complete redirected TIDAL URL"));
+            if ui.add_enabled(!self.pkce_wait && !self.pkce_redirect.trim().is_empty(), egui::Button::new("Finish lossless sign-in").fill(ACCENT)).clicked() {
+                self.pkce_wait = true;
+                let redirect = std::mem::take(&mut self.pkce_redirect);
+                self.send(Request::FinishPkce(redirect));
+            }
+            if self.pkce_wait { ui.spinner(); }
+            if let Some(error) = &self.error { ui.colored_label(Color32::LIGHT_RED, error); }
+            ui.label(RichText::new("Your current session stays connected until authorization succeeds. This does not change your subscription.").size(12.).color(MUTED));
+        });
+        if !open {
+            self.pkce_url = None;
+            self.pkce_redirect.clear();
+            self.send(Request::CancelPkce);
         }
     }
 
@@ -1119,16 +1427,26 @@ impl App {
         let mut open = true;
         egui::Window::new("Settings").open(&mut open).resizable(false).default_width(430.).show(ctx, |ui| {
             ui.heading("Listening quality");
+            if self.auth_pkce {
+                ui.label(RichText::new("Lossless-capable sign-in connected").color(ACCENT));
+            } else {
+                ui.label("This device session is limited to AAC. Reauthorize with TIDAL to enable lossless.");
+            }
+            if ui.button(if self.auth_pkce { "Reconnect lossless account" } else { "Enable lossless sign-in" }).clicked() {
+                self.send(Request::BeginPkce);
+            }
             ui.add_space(8.);
             ui.radio_value(&mut self.quality, "LOSSLESS".into(), "Lossless · FLAC");
-            ui.radio_value(&mut self.quality, "HIGH".into(), "High · AAC");
-            ui.radio_value(&mut self.quality, "LOW".into(), "Low · lower bandwidth");
+            ui.add_enabled_ui(!self.auth_pkce, |ui| {
+                ui.radio_value(&mut self.quality, "HIGH".into(), "Compatibility High · AAC");
+                ui.radio_value(&mut self.quality, "LOW".into(), "Compatibility Low · AAC");
+            });
             ui.label(RichText::new("Applies to the next track. The player shows the quality TIDAL actually returns; it never claims unverified hi-res or bit-perfect output.").size(12.).color(MUTED));
             ui.separator();
             ui.label("Shortcuts");
-            ui.label(RichText::new("Space  Play / pause\nCtrl+K  Search\nCtrl+Left / Right  Previous / next").size(13.).color(MUTED));
+            ui.label(RichText::new("Media play/pause, next, previous  System-wide (MPRIS)\nSpace  Play / pause in this window\nCtrl+K  Search\nCtrl+Left / Right  Previous / next").size(13.).color(MUTED));
             ui.separator();
-            ui.label(RichText::new("Unofficial TIDAL client. Account access can change if TIDAL changes its native API. Only unencrypted BTS streams are supported; DASH and DRM are not.").size(12.).color(MUTED));
+            ui.label(RichText::new("Unofficial TIDAL client. Lossless sign-in streams unencrypted DASH FLAC. Compatibility sign-in supports BTS audio. If TIDAL only offers lossy audio in lossless mode, playback fails explicitly. Encrypted audio is not supported.").size(12.).color(MUTED));
             ui.label(RichText::new("Session tokens are stored locally in a private (0600) file. Signing out removes them. No passwords, telemetry, or third-party music proxies.").size(12.).color(MUTED));
             if self.connected && ui.button("Sign out and remove saved session").clicked() {
                 self.logout(); self.settings = false;
@@ -1162,6 +1480,7 @@ impl eframe::App for App {
             }
         }
         self.events();
+        self.desktop_events(ctx);
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             self.navigate(Page::Search);
         }
@@ -1189,6 +1508,65 @@ impl eframe::App for App {
                     });
             });
         self.settings(ctx);
+        self.lossless_sign_in(ctx);
+        if let Some(media) = &mut self.media
+            && let Err(e) = media.update(
+                self.queue.current(),
+                self.paused || self.buffering,
+                self.position,
+                self.volume,
+            )
+        {
+            self.error = Some(format!("Desktop media controls: {e}"));
+            self.media = None;
+        }
+    }
+}
+
+fn folder_button(ui: &mut egui::Ui, name: &str, expanded: bool) -> egui::Response {
+    let (r, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), 30.), egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(r, 4., CARD);
+    }
+    let c = pos2(r.left() + 7., r.center().y);
+    let points = if expanded {
+        vec![c + vec2(-4., -2.), c + vec2(4., -2.), c + vec2(0., 3.)]
+    } else {
+        vec![c + vec2(-2., -4.), c + vec2(-2., 4.), c + vec2(3., 0.)]
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, MUTED, Stroke::NONE));
+    ui.painter().with_clip_rect(r).text(
+        pos2(r.left() + 20., r.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::FontId::proportional(14.),
+        Color32::WHITE,
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+    response
+}
+
+fn radio_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<RadioSeed>) {
+    if ui.button("Start track radio").clicked() {
+        *radio = Some(RadioSeed::Track {
+            id: track.id,
+            title: track.title.clone(),
+        });
+        ui.close();
+    }
+    if track.artist.id != 0
+        && ui
+            .button(format!("Start artist radio · {}", track.artist.name))
+            .clicked()
+    {
+        *radio = Some(RadioSeed::Artist {
+            id: track.artist.id,
+            name: track.artist.name.clone(),
+        });
+        ui.close();
     }
 }
 
