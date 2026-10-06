@@ -15,7 +15,12 @@ use stream_download::{Settings, StreamDownload, storage::temp::TempStorageProvid
 type AudioDecoder = Decoder<StreamDownload<TempStorageProvider>>;
 
 enum Command {
-    Load(u64, Box<dyn Source<Item = f32> + Send>, String),
+    Load(
+        u64,
+        Box<dyn Source<Item = f32> + Send>,
+        String,
+        Option<crate::dash::SeekHandle>,
+    ),
     Pause(bool),
     Seek(u64),
     Volume(f32),
@@ -48,9 +53,10 @@ impl Player {
             let mut sink = Sink::connect_new(output.mixer());
             let mut volume = 0.65;
             let mut active = None;
+            let mut seeker: Option<crate::dash::SeekHandle> = None;
             loop {
                 match rx.recv_timeout(Duration::from_millis(250)) {
-                    Ok(Command::Load(id, decoder, quality)) => {
+                    Ok(Command::Load(id, decoder, quality, seek_handle)) => {
                         if id != current.load(Ordering::SeqCst) {
                             continue;
                         }
@@ -59,6 +65,7 @@ impl Player {
                         sink.set_volume(volume);
                         sink.append(decoder);
                         active = Some(id);
+                        seeker = seek_handle;
                         events.send(Event::Playing {
                             generation: id,
                             quality,
@@ -76,13 +83,29 @@ impl Player {
                         sink.set_volume(v);
                     }
                     Ok(Command::Seek(s)) => {
-                        if let Err(e) = sink.try_seek(Duration::from_secs(s)) {
+                        let paused = sink.is_paused();
+                        sink.pause();
+                        let position = Duration::from_secs(s);
+                        let prepared = if let Some(seeker) = &seeker {
+                            seeker.prepare(position)
+                        } else {
+                            Ok(())
+                        };
+                        let result = prepared.and_then(|()| {
+                            sink.try_seek(position)
+                                .map_err(|e| anyhow::anyhow!(e.to_string()))
+                        });
+                        if !paused {
+                            sink.play();
+                        }
+                        if let Err(e) = result {
                             events.send(Event::Error(format!("Cannot seek this stream: {e}")));
                         }
                     }
                     Ok(Command::Stop) => {
                         sink.stop();
                         active = None;
+                        seeker = None;
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -91,10 +114,12 @@ impl Player {
                     if id != current.load(Ordering::SeqCst) {
                         sink.stop();
                         active = None;
+                        seeker = None;
                         continue;
                     }
                     if sink.empty() {
                         active = None;
+                        seeker = None;
                         events.send(Event::Ended(id));
                     } else if !sink.is_paused() {
                         events.send(Event::Position {
@@ -134,6 +159,7 @@ impl Player {
             return Ok(());
         }
         let quality = stream.label();
+        let mut seeker = None;
         let decoder: Box<dyn Source<Item = f32> + Send> = match stream.source {
             StreamSource::Direct(url) => {
                 let reader = StreamDownload::new_http(
@@ -149,11 +175,15 @@ impl Player {
                 })?;
                 Box::new(decode(reader).await?)
             }
-            StreamSource::Dash(manifest) => Box::new(crate::dash::source(manifest).await?),
+            StreamSource::Dash(manifest) => {
+                let source = crate::dash::source(manifest).await?;
+                seeker = Some(source.seek_handle());
+                Box::new(source)
+            }
         };
         if self.current(id) {
             self.tx
-                .send(Command::Load(id, decoder, quality))
+                .send(Command::Load(id, decoder, quality, seeker))
                 .map_err(|_| anyhow::anyhow!("Audio output is unavailable"))?;
         }
         Ok(())

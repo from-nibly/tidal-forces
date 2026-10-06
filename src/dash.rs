@@ -151,6 +151,69 @@ struct Cache {
 }
 
 type ChunkDecoder = Decoder<Cursor<Vec<u8>>>;
+struct PreparedSeek {
+    position: Duration,
+    index: usize,
+    data: Arc<Vec<u8>>,
+    decoder: ChunkDecoder,
+}
+
+#[derive(Clone)]
+pub struct SeekHandle {
+    manifest: Manifest,
+    init: Arc<Vec<u8>>,
+    cache: Arc<Cache>,
+    client: reqwest::Client,
+    runtime: tokio::runtime::Handle,
+    prepared: Arc<Mutex<Option<PreparedSeek>>>,
+    channels: u16,
+}
+impl SeekHandle {
+    // Called on the audio-control thread, never the real-time output callback.
+    pub fn prepare(&self, position: Duration) -> Result<()> {
+        let position = position.min(
+            self.manifest
+                .duration
+                .saturating_sub(Duration::from_millis(1)),
+        );
+        let index = self
+            .manifest
+            .segments
+            .partition_point(|s| s.start <= position)
+            .saturating_sub(1);
+        let cached = self.cache.state.lock().unwrap().chunks.get(&index).cloned();
+        let data = match cached {
+            Some(data) => data,
+            None => Arc::new(
+                self.runtime
+                    .block_on(download(&self.client, &self.manifest.segments[index].url))?,
+            ),
+        };
+        let mut decoder = decode_chunk(&self.init, &data)?;
+        ensure!(
+            decoder.channels() == self.channels
+                && decoder.sample_rate() == self.manifest.sample_rate,
+            "FLAC format changed during seek"
+        );
+        let offset = position.saturating_sub(self.manifest.segments[index].start);
+        let skip = (offset.as_secs_f64() * self.manifest.sample_rate as f64).round() as usize
+            * self.channels as usize;
+        if skip > 0 {
+            ensure!(
+                decoder.nth(skip - 1).is_some(),
+                "Seek exceeds audio fragment"
+            );
+        }
+        *self.prepared.lock().unwrap() = Some(PreparedSeek {
+            position,
+            index,
+            data,
+            decoder,
+        });
+        Ok(())
+    }
+}
+
 pub struct DashSource {
     manifest: Manifest,
     init: Arc<Vec<u8>>,
@@ -161,6 +224,7 @@ pub struct DashSource {
     channels: u16,
     sample_rate: u32,
     exhausted: bool,
+    seeker: SeekHandle,
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
@@ -213,6 +277,8 @@ pub async fn source(manifest: Manifest) -> Result<DashSource> {
     let (tx, mut rx) = watch::channel(Some(0));
     let worker_cache = cache.clone();
     let segments = manifest.segments.clone();
+    let seek_client = client.clone();
+    let runtime = tokio::runtime::Handle::current();
     tokio::spawn(async move {
         loop {
             let Some(index) = *rx.borrow_and_update() else {
@@ -250,6 +316,15 @@ pub async fn source(manifest: Manifest) -> Result<DashSource> {
             sample_rate == manifest.sample_rate,
             "Decoded FLAC rate does not match manifest"
         );
+        let seeker = SeekHandle {
+            manifest: manifest.clone(),
+            init: init.clone(),
+            cache: cache.clone(),
+            client: seek_client,
+            runtime,
+            prepared: Arc::new(Mutex::new(None)),
+            channels,
+        };
         Ok(DashSource {
             manifest,
             init,
@@ -260,12 +335,17 @@ pub async fn source(manifest: Manifest) -> Result<DashSource> {
             channels,
             sample_rate,
             exhausted: false,
+            seeker,
         })
     })
     .await?
 }
 
 impl DashSource {
+    pub fn seek_handle(&self) -> SeekHandle {
+        self.seeker.clone()
+    }
+
     fn load(&mut self, index: usize, offset: Duration) -> Result<()> {
         ensure!(
             offset < self.manifest.segments[index].duration,
@@ -354,6 +434,20 @@ impl Source for DashSource {
                 .duration
                 .saturating_sub(Duration::from_millis(1)),
         );
+        if let Some(prepared) = self.seeker.prepared.lock().unwrap().take()
+            && prepared.position == pos
+        {
+            self.decoder = prepared.decoder;
+            self.index = prepared.index;
+            self.exhausted = false;
+            let mut state = self.cache.state.lock().unwrap();
+            state
+                .chunks
+                .retain(|i, _| *i >= self.index && *i <= self.index + 2);
+            state.chunks.insert(self.index, prepared.data);
+            let _ = self.request.send(Some(self.index));
+            return Ok(());
+        }
         let index = self
             .manifest
             .segments

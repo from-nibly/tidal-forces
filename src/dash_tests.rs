@@ -118,6 +118,18 @@ async fn lossless_segments_are_contiguous_and_seekable_with_bounded_buffering() 
             decoded[..1000]
         );
         assert!(audio.cache.state.lock().unwrap().chunks.len() <= 3);
+        let seeker = audio.seek_handle();
+        seeker.prepare(Duration::from_millis(2500)).unwrap();
+        {
+            let mut cache = audio.cache.state.lock().unwrap();
+            cache.chunks.clear();
+            cache.error = Some("simulated network outage after preparation".into());
+        }
+        audio.try_seek(Duration::from_millis(2500)).unwrap();
+        assert_eq!(
+            audio.by_ref().take(1000).collect::<Vec<_>>(),
+            decoded[110250..111250]
+        );
     })
     .await
     .unwrap();

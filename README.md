@@ -55,8 +55,10 @@ The lossless connection supports **unencrypted DASH FLAC** and direct BTS FLAC
 streams. Native decoding uses rodio/Symphonia. DASH initialization and media
 fragments are fetched in the background; only the current fragment and two ahead
 are retained. Playback does not wait for the whole track. Seeking selects and
-buffers the appropriate fragment and decodes to the requested sample offset.
-The player reports TIDAL's returned codec, bit depth and sample rate. Live
+buffers the appropriate fragment and decodes to the requested sample offset on
+the audio-control worker before the output callback switches sources. A seek
+briefly holds an additional prepared fragment; network waits do not run in the
+seek callback. The player reports TIDAL's returned codec, bit depth and sample rate. Live
 16-bit / 44.1 kHz FLAC playback and seeking have been verified with a subscription.
 
 **There is no silent lossy fallback.** If TIDAL offers only AAC/LOW for a track,
