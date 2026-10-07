@@ -14,6 +14,8 @@ mod model;
 mod queue;
 mod store;
 mod ui;
+mod visualizer;
+mod visualizer_ui;
 
 use anyhow::{Context, Result};
 

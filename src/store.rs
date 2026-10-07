@@ -33,6 +33,10 @@ pub fn save(session: &Session) -> Result<()> {
 }
 
 fn save_at(dir: &std::path::Path, session: &Session) -> Result<()> {
+    save_json(dir, "session.json", session)
+}
+
+fn save_json(dir: &std::path::Path, name: &str, value: &impl Serialize) -> Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
@@ -41,9 +45,9 @@ fn save_at(dir: &std::path::Path, session: &Session) -> Result<()> {
     }
     // NamedTempFile is mode 0600 on Unix. Atomic replacement prevents partial tokens.
     let mut file = tempfile::NamedTempFile::new_in(dir)?;
-    file.write_all(&serde_json::to_vec(session)?)?;
+    file.write_all(&serde_json::to_vec(value)?)?;
     file.as_file().sync_all()?;
-    file.persist(dir.join("session.json"))?;
+    file.persist(dir.join(name))?;
     Ok(())
 }
 
@@ -58,6 +62,27 @@ pub fn load() -> Result<Option<Session>> {
     }
 }
 
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub player_bar_visualizer: crate::visualizer::Mode,
+}
+impl Appearance {
+    pub fn load() -> Result<Self> {
+        match fs::read(config_dir()?.join("appearance.json")) {
+            Ok(bytes) => {
+                Ok(serde_json::from_slice(&bytes)
+                    .context("Saved appearance settings are invalid")?)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+    pub fn save(&self) -> Result<()> {
+        save_json(&config_dir()?, "appearance.json", self)
+    }
+}
+
 pub fn clear() -> Result<()> {
     match fs::remove_file(config_dir()?.join("session.json")) {
         Ok(()) => Ok(()),
@@ -69,6 +94,32 @@ pub fn clear() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appearance_round_trips_without_touching_credentials() {
+        use crate::visualizer::Mode;
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("session.json"), b"do not modify").unwrap();
+        assert_eq!(Appearance::default().player_bar_visualizer, Mode::Off);
+        for mode in [Mode::Off, Mode::Spectrum, Mode::Waveform] {
+            save_json(
+                dir.path(),
+                "appearance.json",
+                &Appearance {
+                    player_bar_visualizer: mode,
+                },
+            )
+            .unwrap();
+            let value: Appearance =
+                serde_json::from_slice(&fs::read(dir.path().join("appearance.json")).unwrap())
+                    .unwrap();
+            assert_eq!(value.player_bar_visualizer, mode);
+        }
+        assert_eq!(
+            fs::read(dir.path().join("session.json")).unwrap(),
+            b"do not modify"
+        );
+    }
+
     #[test]
     fn credentials_are_atomic_and_private() {
         let dir = tempfile::tempdir().unwrap();

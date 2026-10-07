@@ -31,6 +31,7 @@ enum Command {
 pub struct Player {
     tx: mpsc::Sender<Command>,
     generation: Arc<AtomicU64>,
+    pub visualizer: Arc<crate::visualizer::Capture>,
 }
 
 impl Player {
@@ -38,6 +39,8 @@ impl Player {
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
+        let visualizer = Arc::new(crate::visualizer::Capture::default());
+        let capture = visualizer.clone();
         std::thread::spawn(move || {
             // Keep the output device alive on its owner thread, not the render thread.
             let mut output = match OutputStreamBuilder::open_default_stream() {
@@ -63,7 +66,14 @@ impl Player {
                         sink.stop();
                         sink = Sink::connect_new(output.mixer());
                         sink.set_volume(volume);
-                        sink.append(decoder);
+                        capture.invalidate();
+                        capture.playing(true);
+                        sink.append(crate::visualizer::Tap::new(
+                            decoder,
+                            capture.clone(),
+                            current.clone(),
+                            id,
+                        ));
                         active = Some(id);
                         seeker = seek_handle;
                         events.send(Event::Playing {
@@ -72,6 +82,7 @@ impl Player {
                         });
                     }
                     Ok(Command::Pause(paused)) => {
+                        capture.playing(!paused);
                         if paused {
                             sink.pause();
                         } else {
@@ -83,6 +94,7 @@ impl Player {
                         sink.set_volume(v);
                     }
                     Ok(Command::Seek(s)) => {
+                        capture.playing(false);
                         let paused = sink.is_paused();
                         sink.pause();
                         let position = Duration::from_secs(s);
@@ -98,11 +110,13 @@ impl Player {
                         if !paused {
                             sink.play();
                         }
+                        capture.playing(!paused);
                         if let Err(e) = result {
                             events.send(Event::Error(format!("Cannot seek this stream: {e}")));
                         }
                     }
                     Ok(Command::Stop) => {
+                        capture.playing(false);
                         sink.stop();
                         active = None;
                         seeker = None;
@@ -112,12 +126,14 @@ impl Player {
                 }
                 if let Some(id) = active {
                     if id != current.load(Ordering::SeqCst) {
+                        capture.playing(false);
                         sink.stop();
                         active = None;
                         seeker = None;
                         continue;
                     }
                     if sink.empty() {
+                        capture.playing(false);
                         active = None;
                         seeker = None;
                         events.send(Event::Ended(id));
@@ -130,11 +146,17 @@ impl Player {
                 }
             }
         });
-        Self { tx, generation }
+        Self {
+            tx,
+            generation,
+            visualizer,
+        }
     }
 
     pub fn reserve(&self) -> u64 {
         let id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.visualizer.playing(false);
+        self.visualizer.invalidate();
         let _ = self.tx.send(Command::Stop);
         id
     }
@@ -145,12 +167,17 @@ impl Player {
         self.reserve();
     }
     pub fn pause(&self, paused: bool) {
+        if paused {
+            self.visualizer.playing(false);
+        }
         let _ = self.tx.send(Command::Pause(paused));
     }
     pub fn volume(&self, volume: f32) {
         let _ = self.tx.send(Command::Volume(volume));
     }
     pub fn seek(&self, seconds: u64) {
+        self.visualizer.playing(false);
+        self.visualizer.invalidate();
         let _ = self.tx.send(Command::Seek(seconds));
     }
 

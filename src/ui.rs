@@ -6,6 +6,8 @@ use crate::{
         Album, Artist, LibraryEntry, Mix, Playlist, PlaylistPage, RadioSeed, Track, cover_url, time,
     },
     queue::Queue,
+    visualizer::Mode,
+    visualizer_ui::Visualizer,
 };
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
 use std::collections::{HashMap, HashSet};
@@ -99,6 +101,7 @@ pub struct App {
     quality: String,
     actual_quality: String,
     settings: bool,
+    visualizer: Visualizer,
 }
 
 impl App {
@@ -156,6 +159,9 @@ impl App {
             );
         });
         egui_extras::install_image_loaders(&cc.egui_ctx);
+        let appearance = crate::store::Appearance::load();
+        let appearance_error = appearance.as_ref().err().map(|e| e.to_string());
+        let visualizer = Visualizer::new(appearance.unwrap_or_default().player_bar_visualizer);
         let media_result = DesktopControls::new(cc.egui_ctx.clone());
         let media_error = media_result
             .as_ref()
@@ -200,7 +206,7 @@ impl App {
             generation: 0,
             loading: false,
             more: false,
-            error: media_error,
+            error: media_error.or(appearance_error),
             audio_available: true,
             queue: Queue::default(),
             queue_open: false,
@@ -213,6 +219,7 @@ impl App {
             quality: "LOSSLESS".into(),
             actual_quality: String::new(),
             settings: false,
+            visualizer,
         }
     }
 
@@ -903,8 +910,30 @@ impl App {
             });
     }
 
+    fn set_visualizer(&mut self, mode: Mode) {
+        self.visualizer.set_mode(mode);
+        self.backend.player.visualizer.enable(mode != Mode::Off);
+        if let Err(e) = (crate::store::Appearance {
+            player_bar_visualizer: mode,
+        })
+        .save()
+        {
+            self.error = Some(format!("Could not save appearance settings: {e}"));
+        }
+    }
+
     fn player_bar(&mut self, ctx: &egui::Context) {
         let mut radio = None;
+        let visible = !ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        self.backend
+            .player
+            .visualizer
+            .enable(visible && self.visualizer.mode != Mode::Off);
+        let active = visible
+            && !self.paused
+            && !self.buffering
+            && !self.ended
+            && self.queue.current().is_some();
         egui::TopBottomPanel::bottom("player")
             .exact_height(112.)
             .frame(
@@ -914,6 +943,19 @@ impl App {
                     .stroke(Stroke::new(1.0_f32, CARD)),
             )
             .show(ctx, |ui| {
+                let rect = ui.max_rect().expand(18.);
+                let background = ui.interact(
+                    rect,
+                    ui.id().with("visualizer_toggle"),
+                    egui::Sense::click(),
+                );
+                self.visualizer.paint(
+                    ui,
+                    rect,
+                    &self.backend.player.visualizer,
+                    active,
+                    self.queue.current().and_then(|t| t.cover_url(80)),
+                );
                 let width = ui.available_width();
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(
@@ -1092,6 +1134,14 @@ impl App {
                         },
                     );
                 });
+                if background.clicked() {
+                    self.set_visualizer(self.visualizer.mode.next());
+                    ctx.request_repaint();
+                }
+                background.on_hover_text(format!(
+                    "Player bar visualizer: {} · Click empty space to change",
+                    self.visualizer.mode.label()
+                ));
             });
         if let Some(seed) = radio {
             self.apply_track_action(seed);
@@ -1868,7 +1918,15 @@ impl App {
             return;
         }
         let mut open = true;
-        egui::Window::new("Settings").open(&mut open).resizable(false).default_width(430.).show(ctx, |ui| {
+        let mut mode = self.visualizer.mode;
+        egui::Window::new("Settings").open(&mut open).resizable(false).default_width(430.).vscroll(true).max_height((ctx.content_rect().height() - 80.).max(200.)).show(ctx, |ui| {
+            ui.heading("Appearance");
+            ui.label("Player bar visualizer");
+            ui.horizontal(|ui| {
+                for choice in [Mode::Off, Mode::Spectrum, Mode::Waveform] { ui.selectable_value(&mut mode, choice, choice.label()); }
+            });
+            ui.label(RichText::new("Real audio, colored by the album artwork. Click empty space in the bottom bar to cycle modes. Volume does not affect the display.").size(12.).color(MUTED));
+            ui.separator();
             ui.heading("Listening quality");
             if self.auth_pkce {
                 ui.label(RichText::new("Lossless-capable sign-in connected").color(ACCENT));
@@ -1894,6 +1952,10 @@ impl App {
             }
             ui.label(RichText::new(format!("Tidal Forces {}", env!("CARGO_PKG_VERSION"))).size(11.).color(MUTED));
         });
+        if mode != self.visualizer.mode {
+            self.set_visualizer(mode);
+            ctx.request_repaint();
+        }
         if !open {
             self.settings = false;
         }

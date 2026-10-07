@@ -147,6 +147,28 @@ The app registers only the `tidal` scheme, not a catch-all HTTPS handler. Unknow
 link types, foreign hosts and malformed IDs are rejected. Authentication links
 must still go through the separate masked sign-in dialog.
 
+## Player bar visualizer
+
+**Settings → Appearance → Player bar visualizer** offers **Off**, **Spectrum**,
+and **Waveform**. Clicking empty space in the bottom player bar cycles those modes;
+playback buttons, seeking and volume controls keep their normal behavior.
+
+- Spectrum shows 48 bass-to-treble bands with smooth decay and falling peaks.
+- Waveform draws a glowing trace behind the controls. Both use colors extracted
+  from the current album artwork, with a Tidal Forces palette when art is unavailable.
+- The picture follows actual decoded FLAC/AAC audio, before output volume. It
+  still moves when muted; pausing/stopping clears it. No microphone or system
+  audio capture is used.
+- The mode defaults to Off and is saved separately from credentials in
+  `~/.config/tidal-forces/appearance.json`. Animation is capped at a roughly
+  30 Hz requested refresh rate and disabled while paused, off or minimized.
+
+The independent implementation is inspired by Spotifast's player-bar visualizer.
+A fixed-size, atomic PCM snapshot keeps the tap non-blocking, with no tap allocations,
+locks or FFT work in the output callback. The UI computes a windowed 2048-point FFT;
+only the visualization is downmixed and capped at 48 kHz. Playback samples pass
+through unchanged. Seeks and track changes invalidate the previous snapshot.
+
 ## Standard desktop media controls
 
 The app exposes **`org.mpris.MediaPlayer2.tidalforces`** on the session bus,
@@ -227,6 +249,9 @@ seeking across buffer eviction, bounded caching, manifest rejection, OAuth state
 folder parsing, queue behavior and private credential persistence. AAC-LC,
 HE-AAC and HE-AAC v2 fixtures verify full-rate stereo output, uninterrupted codec
 state across fragments, and seek preroll against a continuous reference decode.
+Visualizer tests cover sample-for-sample passthrough, pre-volume capture, silence,
+frequency detection, peak decay, high sample rates, concurrent snapshot consistency,
+pause/seek/track invalidation, artwork colors and preference persistence.
 Playlist API fixtures cover pagination, duplicate skipping, ownership checks,
 revision conflicts, and exact occurrence removal. URI parsing rejects untrusted
 hosts and malformed identifiers. Test single-instance activation on an isolated
@@ -258,6 +283,8 @@ is committed and all CI builds use `--locked`.
 - `backend.rs`: bounded command channel and generation-guarded background work.
 - `audio.rs` / `dash.rs` / `aac.rs`: native audio, bounded FLAC/AAC buffering,
   AAC decoder continuity, and prepared seeks.
+- `visualizer.rs` / `visualizer_ui.rs`: bounded PCM tapping, UI-thread spectrum
+  analysis, album-derived colors, and native player-bar rendering.
 - `desktop.rs` / `links.rs`: standard MPRIS integration, strict URI parsing and
   session-bus single-instance activation.
 - `store.rs` / `install.rs`: private atomic sessions and desktop installation.
