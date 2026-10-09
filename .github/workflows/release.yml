@@ -41,6 +41,8 @@ jobs:
         run: cargo test --locked
       - name: Single-instance URI activation
         run: dbus-run-session -- cargo test --locked single_instance_forwards_links_and_activation -- --ignored
+      - name: Secret Service migration and recovery contract
+        run: dbus-run-session -- env TIDAL_TEST_SECRET_SERVICE=1 cargo test --locked native_secret_service_contract_on_isolated_bus -- --ignored
       - name: Build the single executable
         run: cargo build --locked --release
       - name: Verify release executable
@@ -65,9 +67,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="master-${GITHUB_SHA:0:12}"
+          version="$(target/release/tidal-forces --version)"
+          version="${version##* }"
+          case "$version" in *-dev) echo "Development versions must not be published" >&2; exit 1 ;; esac
+          notes="docs/releases/v${version}.md"
+          test -f "$notes"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
-              --title "Tidal Forces · ${GITHUB_SHA:0:12}" \
-              --notes "Automated Linux x86_64 build from master (${GITHUB_SHA}). Download the executable, make it executable, then run it with --install to register the desktop app. Requires a TIDAL subscription. See README for runtime requirements and playback limitations."
+              --title "Tidal Forces v${version} · ${GITHUB_SHA:0:12}" \
+              --notes-file "$notes"
           fi
           gh release upload "$tag" dist/* --clobber

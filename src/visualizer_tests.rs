@@ -17,6 +17,20 @@ fn tap(samples: Vec<f32>, channels: u16, rate: u32, capture: Arc<Capture>) -> Ta
 }
 
 #[test]
+fn busy_snapshot_is_distinct_from_an_invalidated_display_epoch() {
+    let capture = capture();
+    tap(vec![0.4; SAMPLES], 1, 48000, capture.clone()).for_each(drop);
+    let frame = capture.snapshot().unwrap();
+    capture.sequence.fetch_add(1, Ordering::AcqRel);
+    assert!(capture.snapshot().is_none());
+    assert!(capture.is_current(frame.epoch));
+    capture.invalidate();
+    assert!(!capture.is_current(frame.epoch));
+    capture.sequence.fetch_add(1, Ordering::Release);
+    assert!(capture.snapshot().is_none());
+}
+
+#[test]
 fn pcm_is_bit_identical_including_nonfinite_samples_and_metadata() {
     let mut samples: Vec<_> = (0..SAMPLES * 4).map(|i| (i as f32 * 0.1).sin()).collect();
     samples[5] = f32::NAN;

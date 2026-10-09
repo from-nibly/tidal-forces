@@ -1,6 +1,8 @@
-use crate::visualizer::{Analyzer, BANDS, Capture, Mode};
+use crate::visualizer::{Analyzer, BANDS, Capture, Frame, Mode};
 use eframe::egui::{self, Color32, Rect, Stroke, pos2, vec2};
 use std::time::{Duration, Instant};
+
+const STALE_AFTER: Duration = Duration::from_millis(180);
 
 const FALLBACK: [Color32; 2] = [
     Color32::from_rgb(81, 225, 219),
@@ -13,7 +15,7 @@ pub struct Visualizer {
     cover: Option<String>,
     palette: [Color32; 2],
     palette_loaded: bool,
-    last_frame: Option<u64>,
+    last_frame: Option<(u64, u64)>,
     fresh_at: Instant,
 }
 impl Visualizer {
@@ -32,6 +34,37 @@ impl Visualizer {
         self.mode = mode;
         self.analyzer.clear();
         self.last_frame = None;
+    }
+    fn update_capture(
+        &mut self,
+        capture: &Capture,
+        frame: Option<Frame>,
+        now: Instant,
+        dt: f32,
+    ) -> bool {
+        if let Some(frame) = &frame {
+            let identity = (frame.epoch, frame.serial);
+            if self.last_frame != Some(identity) {
+                self.last_frame = Some(identity);
+                self.fresh_at = now;
+            }
+        }
+        let fresh = self
+            .last_frame
+            .is_some_and(|(epoch, _)| capture.is_current(epoch))
+            && now.saturating_duration_since(self.fresh_at) <= STALE_AFTER;
+        if !fresh {
+            self.analyzer.clear();
+            // Keep the identity: rereading the same stalled frame must not revive it.
+            return false;
+        }
+        if let Some(frame) = frame {
+            self.analyzer
+                .update(&frame, dt, self.mode == Mode::Spectrum);
+        }
+        // A busy publisher may prevent a coherent read. Retain the last analyzed
+        // display without advancing it or extending its freshness deadline.
+        true
     }
     pub fn paint(
         &mut self,
@@ -69,23 +102,14 @@ impl Visualizer {
         // No animation timer while paused/off/minimized. A stalled stream goes dark
         // instead of animating stale samples indefinitely.
         ui.ctx().request_repaint_after(Duration::from_millis(33));
-        let Some(frame) = capture.snapshot() else {
-            self.analyzer.clear();
-            return;
-        };
-        if self.last_frame != Some(frame.serial) {
-            self.last_frame = Some(frame.serial);
-            self.fresh_at = Instant::now();
-        }
-        if self.fresh_at.elapsed() > Duration::from_millis(180) {
-            self.analyzer.clear();
+        if !self.update_capture(
+            capture,
+            capture.snapshot(),
+            Instant::now(),
+            ui.input(|input| input.stable_dt),
+        ) {
             return;
         }
-        self.analyzer.update(
-            &frame,
-            ui.input(|i| i.stable_dt),
-            self.mode == Mode::Spectrum,
-        );
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
         match self.mode {
             Mode::Spectrum => {
@@ -221,6 +245,117 @@ fn palette(pixels: &[Color32]) -> [Color32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn feed(capture: &std::sync::Arc<Capture>) {
+        let samples = (0..4096)
+            .map(|i| (std::f32::consts::TAU * 440. * i as f32 / 48000.).sin() * 0.7)
+            .collect::<Vec<_>>();
+        let source = rodio::buffer::SamplesBuffer::new(1, 48000, samples);
+        let generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+        crate::visualizer::Tap::new(source, capture.clone(), generation, 1).for_each(drop);
+    }
+    fn signal() -> std::sync::Arc<Capture> {
+        let capture = std::sync::Arc::new(Capture::default());
+        capture.enable(true);
+        capture.playing(true);
+        feed(&capture);
+        capture
+    }
+    #[test]
+    fn transient_snapshot_misses_preserve_both_displays_but_never_extend_freshness() {
+        for mode in [Mode::Spectrum, Mode::Waveform] {
+            let capture = signal();
+            let mut visualizer = Visualizer::new(mode);
+            let now = Instant::now();
+            assert!(visualizer.update_capture(&capture, capture.snapshot(), now, 0.033));
+            let bars = visualizer.analyzer.bars;
+            let wave = visualizer.analyzer.wave;
+            assert!(wave.iter().any(|value| value.abs() > 0.01));
+            if mode == Mode::Spectrum {
+                assert!(bars.iter().any(|value| *value > 0.01));
+            }
+            for millis in [33, 66, 99, 132, 165, 180] {
+                assert!(visualizer.update_capture(
+                    &capture,
+                    None,
+                    now + Duration::from_millis(millis),
+                    0.033
+                ));
+                assert_eq!(visualizer.analyzer.bars, bars);
+                assert_eq!(visualizer.analyzer.wave, wave);
+            }
+            assert!(!visualizer.update_capture(
+                &capture,
+                None,
+                now + Duration::from_millis(181),
+                0.033
+            ));
+            // Reading the same old publication successfully cannot revive a stalled display.
+            for millis in [200, 250, 400] {
+                assert!(!visualizer.update_capture(
+                    &capture,
+                    capture.snapshot(),
+                    now + Duration::from_millis(millis),
+                    0.033
+                ));
+                assert!(visualizer.analyzer.wave.iter().all(|value| *value == 0.));
+            }
+            feed(&capture);
+            assert!(visualizer.update_capture(
+                &capture,
+                capture.snapshot(),
+                now + Duration::from_millis(401),
+                0.033
+            ));
+            assert!(
+                visualizer
+                    .analyzer
+                    .wave
+                    .iter()
+                    .any(|value| value.abs() > 0.01)
+            );
+        }
+    }
+    #[test]
+    fn snapshot_misses_never_reuse_invalidated_paused_or_disabled_data() {
+        for transition in 0..3 {
+            let capture = signal();
+            let mut visualizer = Visualizer::new(Mode::Spectrum);
+            let now = Instant::now();
+            assert!(visualizer.update_capture(&capture, capture.snapshot(), now, 0.033));
+            match transition {
+                0 => capture.invalidate(),
+                1 => capture.playing(false),
+                _ => capture.enable(false),
+            }
+            assert!(capture.snapshot().is_none());
+            assert!(!visualizer.update_capture(
+                &capture,
+                None,
+                now + Duration::from_millis(1),
+                0.033
+            ));
+            assert!(visualizer.analyzer.bars.iter().all(|value| *value == 0.));
+            assert!(visualizer.analyzer.wave.iter().all(|value| *value == 0.));
+        }
+    }
+    #[test]
+    fn inactive_or_off_paint_clears_even_a_fresh_cached_display() {
+        for mode in [Mode::Spectrum, Mode::Off] {
+            let capture = signal();
+            let mut visualizer = Visualizer::new(Mode::Spectrum);
+            assert!(visualizer.update_capture(&capture, capture.snapshot(), Instant::now(), 0.033));
+            visualizer.mode = mode;
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    visualizer.paint(ui, ui.max_rect(), &capture, mode == Mode::Off, None)
+                });
+            });
+            assert!(visualizer.last_frame.is_none());
+            assert!(visualizer.analyzer.wave.iter().all(|value| *value == 0.));
+        }
+    }
+
     #[test]
     fn artwork_colors_ignore_transparency_and_do_not_invent_random_colors() {
         assert_eq!(palette(&[]), FALLBACK);

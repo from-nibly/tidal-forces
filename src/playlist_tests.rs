@@ -7,15 +7,16 @@ use std::{
     time::Instant,
 };
 
-struct Step {
+pub(super) struct Step {
     method: &'static str,
     path: &'static str,
-    contains: Vec<&'static str>,
-    status: u16,
-    etag: &'static str,
+    pub(super) contains: Vec<&'static str>,
+    pub(super) status: u16,
+    pub(super) etag: &'static str,
     body: Value,
+    pub(super) on_request: Option<Box<dyn FnOnce() + Send>>,
 }
-fn step(method: &'static str, path: &'static str, body: Value) -> Step {
+pub(super) fn step(method: &'static str, path: &'static str, body: Value) -> Step {
     Step {
         method,
         path,
@@ -23,6 +24,7 @@ fn step(method: &'static str, path: &'static str, body: Value) -> Step {
         status: 200,
         etag: "\"revision-1\"",
         body,
+        on_request: None,
     }
 }
 fn metadata() -> Value {
@@ -31,7 +33,7 @@ fn metadata() -> Value {
 fn track(id: u64) -> Value {
     json!({"type":"track","item":{"id":id,"title":"Synthetic metadata"}})
 }
-fn mock(steps: Vec<Step>) -> (Api, thread::JoinHandle<()>) {
+pub(super) fn mock(steps: Vec<Step>) -> (Api, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut api = Api::new().unwrap();
@@ -93,12 +95,23 @@ fn mock(steps: Vec<Step>) -> (Api, thread::JoinHandle<()>) {
             for needle in step.contains {
                 assert!(request.contains(needle), "Missing {needle}: {request}");
             }
+            if let Some(on_request) = step.on_request {
+                on_request();
+            }
+            if step.status == 0 {
+                continue;
+            }
             let body = if step.status == 204 {
                 String::new()
             } else {
                 step.body.to_string()
             };
-            write!(socket, "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\nETag: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", step.status, step.etag, body.len(), body).unwrap();
+            let etag = if step.etag.is_empty() {
+                String::new()
+            } else {
+                format!("ETag: {}\r\n", step.etag)
+            };
+            write!(socket, "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}", step.status, etag, body.len(), body).unwrap();
         }
     });
     (api, server)
@@ -312,7 +325,7 @@ async fn owned_picker_paginates_and_rejects_cross_page_revision_changes() {
 #[ignore = "Mutates a temporary playlist on the locally signed-in account; run explicitly"]
 async fn live_playlist_round_trip() {
     let mut api = Api::new().unwrap();
-    api.session = store::load().unwrap();
+    api.session = api.credentials.load().await.unwrap();
     api.identify().await.unwrap();
     let title = format!("Tidal Forces verification {} (temporary)", store::now());
     let playlist = api

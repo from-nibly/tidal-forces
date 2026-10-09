@@ -1,16 +1,21 @@
 mod aac;
 mod api;
 mod audio;
+mod audio_meter;
 #[cfg(test)]
 mod audio_tests;
 mod auth;
 mod backend;
+mod credentials;
 mod dash;
 mod desktop;
+mod history;
 mod install;
+mod library;
 mod licenses;
 mod links;
 mod model;
+mod player_state;
 mod queue;
 mod store;
 mod ui;
@@ -21,6 +26,10 @@ use anyhow::{Context, Result};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(debug_assertions)]
+    if args.first().is_some_and(|arg| arg == "--visual-fixture") {
+        return ui::visual_fixture::capture(&args[1..]);
+    }
     let smoke_dir = tempfile::tempdir()?;
     let mut link_uri = None;
     let screenshot = match args.first().map(String::as_str) {
@@ -121,10 +130,11 @@ fn main() -> Result<()> {
 fn check_account(refresh: bool) -> Result<()> {
     tokio::runtime::Runtime::new()?.block_on(async {
         let mut api = api::Api::new()?;
-        api.session = store::load()?;
+        api.session = api.credentials.load().await?;
         if refresh {
             api.session.as_mut().context("Sign in first")?.expires_at = 0;
         }
+        let result: Result<()> = async {
         api.identify().await?;
         println!(
             "Authenticated account in {}",
@@ -177,6 +187,10 @@ fn check_account(refresh: bool) -> Result<()> {
             }
         }
         Ok(())
+        }.await;
+        if let Some(warning) = &api.credential_warning { eprintln!("Credential storage warning: {warning}"); }
+        anyhow::ensure!(!api.credentials_dirty, "Current sign-in was not saved. Unlock/fix credential storage and reconnect using the GUI.");
+        result
     })
 }
 
@@ -189,13 +203,28 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
         generation,
         id,
         quality: "LOSSLESS".into(),
+        position: 0,
     })?;
     let start = Instant::now();
     let mut seeking = false;
     while start.elapsed() < Duration::from_secs(90) {
         if let Ok(event) = backend.rx.recv_timeout(Duration::from_secs(1)) {
             match event {
-                Event::Playing { quality, .. } => println!("Decoder started: {quality}"),
+                Event::Credentials { warning, dirty, .. } => {
+                    if let Some(warning) = warning {
+                        eprintln!("Credential storage warning: {warning}");
+                    }
+                    if dirty {
+                        backend.player.stop();
+                        anyhow::bail!(
+                            "Playback check stopped because sign-in storage failed. Unlock/fix credential storage and reconnect using the GUI."
+                        );
+                    }
+                }
+                Event::Playing { quality, .. } => {
+                    backend.player.pause(false);
+                    println!("Decoder started: {quality}");
+                }
                 Event::Position { seconds, .. } if !seeking && seconds >= 9 => {
                     if seek {
                         backend.player.pause(true);

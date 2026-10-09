@@ -50,6 +50,10 @@ pub struct Playlist {
     pub uuid: String,
     pub title: String,
     #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub square_image: Option<String>,
+    #[serde(default)]
     pub number_of_tracks: u64,
     #[serde(default)]
     pub number_of_videos: u64,
@@ -57,6 +61,19 @@ pub struct Playlist {
     pub creator: Option<PlaylistCreator>,
     #[serde(default, rename = "type")]
     pub kind: String,
+}
+
+impl Playlist {
+    pub fn artwork_url(&self) -> Option<String> {
+        cover_url(self.square_image.as_deref(), 320).or_else(|| {
+            self.image.as_deref().filter(|id| !id.is_empty()).map(|id| {
+                format!(
+                    "https://resources.tidal.com/images/{}/480x320.jpg",
+                    id.replace('-', "/")
+                )
+            })
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -113,7 +130,7 @@ pub struct Home {
     pub tracks: Vec<Track>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum RadioSeed {
     Track { id: u64, title: String },
     Artist { id: u64, name: String },
@@ -149,6 +166,27 @@ pub fn time(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn playlist_artwork_uses_provider_square_image_then_wide_image() {
+        let mut playlist: Playlist = serde_json::from_value(serde_json::json!({"uuid":"fixture","title":"Fixture","squareImage":"square-cover","image":"wide-cover"})).unwrap();
+        assert_eq!(
+            playlist.artwork_url().as_deref(),
+            Some("https://resources.tidal.com/images/square/cover/320x320.jpg")
+        );
+        playlist.square_image = Some(String::new());
+        assert_eq!(
+            playlist.artwork_url().as_deref(),
+            Some("https://resources.tidal.com/images/wide/cover/480x320.jpg")
+        );
+        playlist.image = None;
+        assert!(playlist.artwork_url().is_none());
+        let missing: Playlist = serde_json::from_value(
+            serde_json::json!({"uuid":"fixture","title":"No cover supplied"}),
+        )
+        .unwrap();
+        assert!(missing.artwork_url().is_none());
+    }
+
     #[test]
     fn parses_track_and_formats_metadata() {
         let t: Track = serde_json::from_str(r#"{"id":1,"title":"Test","artist":{"name":"Artist"},"album":{"id":2,"title":"Album","cover":"ab-cd"}}"#).unwrap();

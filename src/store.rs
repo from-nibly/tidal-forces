@@ -28,51 +28,63 @@ pub fn config_dir() -> Result<PathBuf> {
         .to_owned())
 }
 
-pub fn save(session: &Session) -> Result<()> {
-    save_at(&config_dir()?, session)
-}
-
+#[cfg(test)]
 fn save_at(dir: &std::path::Path, session: &Session) -> Result<()> {
     save_json(dir, "session.json", session)
 }
 
 fn save_json(dir: &std::path::Path, name: &str, value: &impl Serialize) -> Result<()> {
+    save_bytes(dir, name, &serde_json::to_vec(value)?)
+}
+
+pub(crate) fn private_dir(dir: &std::path::Path) -> Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
-    // NamedTempFile is mode 0600 on Unix. Atomic replacement prevents partial tokens.
-    let mut file = tempfile::NamedTempFile::new_in(dir)?;
-    file.write_all(&serde_json::to_vec(value)?)?;
-    file.as_file().sync_all()?;
-    file.persist(dir.join(name))?;
     Ok(())
 }
 
-pub fn load() -> Result<Option<Session>> {
-    let path = config_dir()?.join("session.json");
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes).context("Saved session is invalid; sign in again")?,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+pub(crate) fn save_bytes(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<()> {
+    private_dir(dir)?;
+    // NamedTempFile is mode 0600 on Unix. Atomic replacement prevents partial tokens.
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    file.write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.persist(dir.join(name))?;
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct Appearance {
     pub player_bar_visualizer: crate::visualizer::Mode,
+    pub compact_rows: bool,
+    pub zoom: f32,
+}
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            player_bar_visualizer: crate::visualizer::Mode::Off,
+            compact_rows: false,
+            zoom: 1.,
+        }
+    }
 }
 impl Appearance {
     pub fn load() -> Result<Self> {
         match fs::read(config_dir()?.join("appearance.json")) {
             Ok(bytes) => {
-                Ok(serde_json::from_slice(&bytes)
-                    .context("Saved appearance settings are invalid")?)
+                let mut appearance: Self = serde_json::from_slice(&bytes)
+                    .context("Saved appearance settings are invalid")?;
+                if !appearance.zoom.is_finite() || !(0.75..=1.5).contains(&appearance.zoom) {
+                    appearance.zoom = 1.;
+                }
+                Ok(appearance)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
@@ -80,14 +92,6 @@ impl Appearance {
     }
     pub fn save(&self) -> Result<()> {
         save_json(&config_dir()?, "appearance.json", self)
-    }
-}
-
-pub fn clear() -> Result<()> {
-    match fs::remove_file(config_dir()?.join("session.json")) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
     }
 }
 
@@ -106,6 +110,7 @@ mod tests {
                 "appearance.json",
                 &Appearance {
                     player_bar_visualizer: mode,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -118,6 +123,14 @@ mod tests {
             fs::read(dir.path().join("session.json")).unwrap(),
             b"do not modify"
         );
+    }
+
+    #[test]
+    fn old_appearance_files_keep_readable_defaults() {
+        let value: Appearance =
+            serde_json::from_str(r#"{"player_bar_visualizer":"spectrum"}"#).unwrap();
+        assert_eq!(value.zoom, 1.);
+        assert!(!value.compact_rows);
     }
 
     #[test]

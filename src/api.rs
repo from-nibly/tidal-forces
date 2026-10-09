@@ -1,5 +1,7 @@
 use crate::{
+    library::{Favorite, FavoriteKind},
     model::{Album, Artist, Home, LibraryEntry, Mix, Playlist, PlaylistPage, RadioSeed, Track},
+    queue::Continuation,
     store::{self, Session},
 };
 use anyhow::{Context, Result, bail};
@@ -20,6 +22,9 @@ pub struct Api {
     client: Client,
     base: String,
     pub session: Option<Session>,
+    pub credentials: crate::credentials::Store,
+    pub credential_warning: Option<String>,
+    pub credentials_dirty: bool,
     client_id: String,
     client_secret: String,
 }
@@ -41,6 +46,19 @@ pub struct Search {
     pub artists: Vec<Artist>,
 }
 
+pub struct LibraryPage {
+    pub data: Search,
+    pub next_offset: usize,
+    pub more: bool,
+    pub total: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct ContextPage {
+    pub tracks: Vec<Track>,
+    pub continuation: Option<Continuation>,
+}
+
 impl Api {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -51,6 +69,9 @@ impl Api {
                 .build()?,
             base: "https://api.tidal.com".into(),
             session: None,
+            credentials: crate::credentials::Store::new()?,
+            credential_warning: None,
+            credentials_dirty: false,
             client_id: std::env::var("TIDAL_CLIENT_ID").unwrap_or_else(|_| CLIENT_ID.into()),
             client_secret: std::env::var("TIDAL_CLIENT_SECRET")
                 .unwrap_or_else(|_| CLIENT_SECRET.into()),
@@ -94,10 +115,14 @@ impl Api {
                 _ => bail!("TIDAL sign-in failed (HTTP {status}). Please retry."),
             };
         }
+        let old = self.session.clone();
         if let Some(session) = self.session.as_mut() {
             session.pkce = false;
         }
-        self.accept_token(v)?;
+        if let Err(error) = self.accept_token(v).await {
+            self.session = old;
+            return Err(error);
+        }
         self.identify().await?;
         Ok(LoginPoll::Complete)
     }
@@ -128,25 +153,26 @@ impl Api {
                 ..Default::default()
             });
         }
-        if let Err(e) = self.accept_token(v) {
+        if let Err(e) = self.accept_token(v).await {
             self.session = old;
             return Err(e);
         }
         self.identify().await
     }
 
-    fn accept_token(&mut self, v: Value) -> Result<()> {
+    async fn accept_token(&mut self, v: Value) -> Result<()> {
         let old = self.session.clone().unwrap_or_default();
         self.session = Some(Session {
             access_token: v["access_token"]
                 .as_str()
+                .filter(|token| !token.is_empty())
                 .context("TIDAL returned no access token")?
                 .into(),
             refresh_token: v["refresh_token"]
                 .as_str()
                 .unwrap_or(&old.refresh_token)
                 .into(),
-            expires_at: store::now() + v["expires_in"].as_u64().unwrap_or(300),
+            expires_at: store::now().saturating_add(v["expires_in"].as_u64().unwrap_or(300)),
             user_id: v["user"]["userId"].as_u64().unwrap_or(old.user_id),
             pkce: old.pkce,
             country: v["user"]["countryCode"]
@@ -154,7 +180,15 @@ impl Api {
                 .unwrap_or(&old.country)
                 .into(),
         });
-        store::save(self.session.as_ref().unwrap())
+        self.persist_session().await;
+        Ok(())
+    }
+
+    pub async fn persist_session(&mut self) {
+        if let Some(session) = &self.session {
+            self.credential_warning = self.credentials.save(session).await.err().map(|error| format!("Fresh sign-in credentials are still in memory, but storage could not be confirmed: {error}. Keep this app open, unlock/fix credential storage and retry saving. No fallback to another storage mode was used."));
+            self.credentials_dirty = self.credential_warning.is_some();
+        }
     }
 
     async fn refresh(&mut self) -> Result<()> {
@@ -176,7 +210,7 @@ impl Api {
             .send()
             .await?;
         let value = check(r).await?.json().await?;
-        self.accept_token(value)
+        self.accept_token(value).await
     }
 
     pub async fn identify(&mut self) -> Result<()> {
@@ -187,7 +221,8 @@ impl Api {
             .as_str()
             .context("TIDAL returned no country")?
             .into();
-        store::save(session)
+        self.persist_session().await;
+        Ok(())
     }
 
     async fn get(&mut self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
@@ -251,6 +286,13 @@ impl Api {
             if r.status() == StatusCode::PRECONDITION_FAILED || r.status() == StatusCode::CONFLICT {
                 bail!("The playlist changed elsewhere. Refresh it before editing again.");
             }
+            if method != Method::GET
+                && (r.status().is_server_error() || r.status() == StatusCode::REQUEST_TIMEOUT)
+            {
+                bail!(
+                    "Could not confirm the change with TIDAL. It may have completed; refresh before retrying."
+                );
+            }
             return check(r).await;
         }
         bail!("Session expired; sign in again")
@@ -283,6 +325,49 @@ impl Api {
             )
             .await?;
         items(&v)
+    }
+
+    pub async fn library(&mut self, kind: FavoriteKind, offset: usize) -> Result<LibraryPage> {
+        let user = self.session.as_ref().context("Sign in first")?.user_id;
+        let value = self
+            .get(
+                &format!("users/{user}/favorites/{}", kind.path()),
+                &[("limit", "100"), ("offset", &offset.to_string())],
+            )
+            .await?;
+        parse_library_page(value, kind, offset)
+    }
+
+    pub async fn set_favorite(&mut self, user: u64, item: Favorite, saved: bool) -> Result<()> {
+        anyhow::ensure!(item.id != 0, "This item has no valid TIDAL ID");
+        anyhow::ensure!(
+            self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "The account changed. Refresh your library before editing favorites."
+        );
+        let base = format!("users/{user}/favorites/{}", item.kind.path());
+        let id = item.id.to_string();
+        if saved {
+            self.request(
+                Method::POST,
+                "v1",
+                &base,
+                &[],
+                &[(item.kind.form_key(), &id)],
+                None,
+            )
+            .await?;
+        } else {
+            self.request(
+                Method::DELETE,
+                "v1",
+                &format!("{base}/{id}"),
+                &[],
+                &[],
+                None,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     pub async fn folder(&mut self, id: &str) -> Result<Vec<LibraryEntry>> {
@@ -410,6 +495,67 @@ impl Api {
         items(&v)
     }
 
+    pub async fn context_page(&mut self, user: u64, source: &Continuation) -> Result<ContextPage> {
+        anyhow::ensure!(
+            self.session
+                .as_ref()
+                .is_some_and(|session| session.user_id == user),
+            "The playback account changed"
+        );
+        let offset = match source {
+            Continuation::Playlist { offset, .. }
+            | Continuation::Album { offset, .. }
+            | Continuation::Favorites { offset, .. } => *offset,
+        };
+        anyhow::ensure!(
+            offset <= 1_000_000,
+            "This playback source exceeds the pagination limit"
+        );
+        match source {
+            Continuation::Playlist { id, etag, offset } => {
+                let page = self.playlist_page(id, *offset, Some(etag)).await?;
+                Ok(ContextPage {
+                    tracks: page.rows.into_iter().map(|(_, track)| track).collect(),
+                    continuation: page.more.then(|| Continuation::Playlist {
+                        id: id.clone(),
+                        etag: page.etag,
+                        offset: page.next_offset,
+                    }),
+                })
+            }
+            Continuation::Album { id, offset } => {
+                let value = self
+                    .get(
+                        &format!("albums/{id}/tracks"),
+                        &[("limit", "100"), ("offset", &offset.to_string())],
+                    )
+                    .await?;
+                let page = parse_library_page(value, FavoriteKind::Tracks, *offset)?;
+                Ok(ContextPage {
+                    tracks: page.data.tracks,
+                    continuation: page.more.then_some(Continuation::Album {
+                        id: *id,
+                        offset: page.next_offset,
+                    }),
+                })
+            }
+            Continuation::Favorites { offset, total } => {
+                let page = self.library(FavoriteKind::Tracks, *offset).await?;
+                anyhow::ensure!(
+                    total.is_none() || page.total == *total,
+                    "Favorites changed while loading the queue. Refresh the library and play it again."
+                );
+                Ok(ContextPage {
+                    tracks: page.data.tracks,
+                    continuation: page.more.then_some(Continuation::Favorites {
+                        offset: page.next_offset,
+                        total: page.total,
+                    }),
+                })
+            }
+        }
+    }
+
     pub async fn track(&mut self, id: u64) -> Result<Track> {
         Ok(serde_json::from_value(
             self.get(&format!("tracks/{id}"), &[]).await?,
@@ -462,6 +608,10 @@ impl Api {
             .context("TIDAL did not supply a playlist revision")?
             .to_str()?
             .to_owned();
+        anyhow::ensure!(
+            !etag.trim().is_empty(),
+            "TIDAL did not supply a valid playlist revision"
+        );
         Ok((response.json().await?, etag))
     }
 
@@ -594,6 +744,124 @@ impl Api {
         Ok(serde_json::from_value(value["data"].clone())?)
     }
 
+    pub async fn create_queue_playlist(
+        &mut self,
+        user: u64,
+        title: &str,
+        description: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Playlist> {
+        anyhow::ensure!(
+            !cancelled.load(std::sync::atomic::Ordering::Acquire),
+            "Queue export was cancelled"
+        );
+        anyhow::ensure!(
+            user != 0
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.user_id == user),
+            "Account changed; queue export was stopped"
+        );
+        self.create_playlist(title, description).await
+    }
+
+    pub async fn append_queue_batch(
+        &mut self,
+        user: u64,
+        id: &str,
+        tracks: &[u64],
+        offset: usize,
+        expected: Option<&str>,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<String> {
+        use std::sync::atomic::Ordering;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Queue export was cancelled"
+        );
+        anyhow::ensure!(
+            user != 0
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.user_id == user),
+            "Account changed; queue export was stopped"
+        );
+        anyhow::ensure!(
+            !tracks.is_empty()
+                && tracks.len() <= 100
+                && tracks.iter().all(|id| *id != 0)
+                && offset
+                    .checked_add(tracks.len())
+                    .is_some_and(|end| end <= 50_000)
+                && (offset == 0 || expected.is_some()),
+            "Invalid queue export batch"
+        );
+        let (playlist, etag) = self.playlist_metadata(id).await?;
+        anyhow::ensure!(
+            self.owns(&playlist),
+            "Only your own playlists can be edited"
+        );
+        if let Some(expected) = expected {
+            ensure_revision(expected, &etag)?;
+        }
+        anyhow::ensure!(
+            playlist.number_of_tracks == offset as u64 && playlist.number_of_videos == 0,
+            "The destination playlist changed; inspect it before saving again"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Queue export was cancelled before the next write"
+        );
+        let track_ids = tracks
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let response = self
+            .request(
+                Method::POST,
+                "v1",
+                &format!("playlists/{id}/items"),
+                &[],
+                &[
+                    ("trackIds", &track_ids),
+                    ("toIndex", &offset.to_string()),
+                    ("onDupes", "ADD"),
+                    ("onArtifactNotFound", "FAIL"),
+                ],
+                Some(&etag),
+            )
+            .await?;
+        let written_revision = response.headers().get("etag").context("TIDAL did not return an export revision. The playlist may contain this batch; inspect it before retrying")?.to_str()?.to_owned();
+        anyhow::ensure!(
+            !written_revision.trim().is_empty(),
+            "Export revision is empty. The playlist may contain this batch; inspect it before retrying"
+        );
+        // Pin read-back to the write revision, not an intervening external edit.
+        let page = self
+            .playlist_page(id, offset, Some(&written_revision))
+            .await?;
+        anyhow::ensure!(
+            page.editable
+                && page.playlist.number_of_tracks == (offset + tracks.len()) as u64
+                && page.playlist.number_of_videos == 0
+                && !page.more
+                && page.next_offset == offset + tracks.len()
+                && page.rows.len() == tracks.len()
+                && page
+                    .rows
+                    .iter()
+                    .zip(tracks)
+                    .enumerate()
+                    .all(|(i, ((position, track), wanted))| *position == offset + i
+                        && track.id == *wanted),
+            "Could not verify the exported batch. The playlist may be partially filled; inspect it before retrying"
+        );
+        Ok(page.etag)
+    }
+
     pub async fn add_to_playlist(&mut self, id: &str, track: u64) -> Result<bool> {
         let (playlist, etag) = self.playlist_metadata(id).await?;
         anyhow::ensure!(
@@ -684,6 +952,15 @@ impl Api {
     }
 }
 
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod context_tests;
+#[cfg(test)]
+#[path = "export_tests.rs"]
+mod export_tests;
+#[cfg(test)]
+#[path = "favorite_tests.rs"]
+mod favorite_tests;
 #[cfg(test)]
 #[path = "playlist_tests.rs"]
 mod playlist_tests;
@@ -817,6 +1094,36 @@ fn parse_folder(v: &Value) -> Result<Vec<LibraryEntry>> {
         .collect()
 }
 
+fn parse_library_page(mut value: Value, kind: FavoriteKind, offset: usize) -> Result<LibraryPage> {
+    let total = value["totalNumberOfItems"].as_u64();
+    let rows = value["items"]
+        .as_array_mut()
+        .context("Invalid library page")?;
+    let raw_count = rows.len();
+    let next_offset = offset
+        .checked_add(raw_count)
+        .context("Invalid library offset")?;
+    let more = total.map_or(raw_count == 100, |total| (next_offset as u64) < total);
+    anyhow::ensure!(
+        !more || raw_count != 0,
+        "TIDAL returned an empty unfinished library page. Refresh to retry."
+    );
+    // Unavailable entries consume an API position even though they cannot render.
+    rows.retain(|row| !row.is_null() && !row.get("item").is_some_and(Value::is_null));
+    let mut data = Search::default();
+    match kind {
+        FavoriteKind::Tracks => data.tracks = items(&value)?,
+        FavoriteKind::Albums => data.albums = items(&value)?,
+        FavoriteKind::Artists => data.artists = items(&value)?,
+    }
+    Ok(LibraryPage {
+        data,
+        next_offset,
+        more,
+        total,
+    })
+}
+
 fn items<T: serde::de::DeserializeOwned>(v: &Value) -> Result<Vec<T>> {
     let values = v["items"]
         .as_array()
@@ -918,6 +1225,41 @@ mod tests {
             let protected = xml.replace("<AdaptationSet>", "<AdaptationSet><ContentProtection/>");
             assert!(parse_stream(&json!({"manifestMimeType":"application/dash+xml","manifest":STANDARD.encode(protected),"audioQuality":"LOW"})).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn failed_token_persistence_keeps_fresh_tokens_in_memory_and_old_copy_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let mut api = Api::new().unwrap();
+        api.credentials = crate::credentials::Store::at(root.path());
+        api.session = Some(Session {
+            access_token: "synthetic-old".into(),
+            refresh_token: "old-refresh".into(),
+            ..Session::default()
+        });
+        api.persist_session().await;
+        assert!(!api.credentials_dirty);
+        let previous = std::fs::read(root.path().join("session.json")).unwrap();
+        std::fs::write(root.path().join("credentials.json"), b"invalid settings").unwrap();
+        api.accept_token(
+            json!({"access_token":"synthetic-new","refresh_token":"new-refresh","expires_in":3600}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(api.session.as_ref().unwrap().access_token, "synthetic-new");
+        assert_eq!(api.session.as_ref().unwrap().refresh_token, "new-refresh");
+        assert!(api.credentials_dirty && api.credential_warning.is_some());
+        assert_eq!(
+            std::fs::read(root.path().join("session.json")).unwrap(),
+            previous
+        );
+        std::fs::remove_file(root.path().join("credentials.json")).unwrap();
+        api.persist_session().await;
+        assert!(!api.credentials_dirty && api.credential_warning.is_none());
+        assert_eq!(
+            api.credentials.load().await.unwrap().unwrap().access_token,
+            "synthetic-new"
+        );
     }
 
     #[test]

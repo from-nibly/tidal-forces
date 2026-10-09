@@ -83,12 +83,19 @@ impl Capture {
     pub fn invalidate(&self) {
         self.epoch.fetch_add(1, Ordering::AcqRel);
     }
+    /// A transient seqlock miss does not invalidate a previously read frame.
+    pub fn is_current(&self, epoch: u64) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+            && self.active.load(Ordering::Relaxed)
+            && self.epoch.load(Ordering::Acquire) == epoch
+    }
     pub fn snapshot(&self) -> Option<Frame> {
         if !self.enabled.load(Ordering::Relaxed) || !self.active.load(Ordering::Relaxed) {
             return None;
         }
         // Atomic samples make even an interrupted read data-race-free. The sequence
-        // check rejects torn frames; a busy writer costs a visual frame, never audio.
+        // check rejects torn frames; the UI may retain a fresh same-epoch display
+        // on contention, never wait on or interfere with audio.
         for _ in 0..2 {
             let serial = self.sequence.load(Ordering::Acquire);
             if serial & 1 != 0 {

@@ -1,8 +1,9 @@
 use crate::{
-    api::{Api, DeviceLogin, LoginPoll, Search},
+    api::{Api, ContextPage, DeviceLogin, LibraryPage, LoginPoll, Search},
     audio::Player,
+    library::{Favorite, FavoriteKind},
     model::{Home, LibraryEntry, Playlist, PlaylistPage, RadioSeed, Track},
-    store,
+    queue::Continuation,
 };
 use std::{
     sync::mpsc,
@@ -16,13 +17,25 @@ pub enum Request {
     CancelPkce,
     Login,
     Logout,
+    MigrateCredentials {
+        user: u64,
+    },
+    RetryCredentialSave,
+    ReloadCredentials,
+    CleanupCredentials,
     Search {
         generation: u64,
         query: String,
     },
-    Favorites {
+    Library {
         generation: u64,
+        kind: FavoriteKind,
         offset: usize,
+    },
+    SetFavorite {
+        user: u64,
+        item: Favorite,
+        saved: bool,
     },
     Home {
         generation: u64,
@@ -59,6 +72,22 @@ pub enum Request {
         id: u64,
     },
     OwnedPlaylists,
+    CreateQueuePlaylist {
+        user: u64,
+        operation: u64,
+        title: String,
+        description: String,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    AppendQueueBatch {
+        user: u64,
+        operation: u64,
+        id: String,
+        tracks: Vec<u64>,
+        offset: usize,
+        etag: Option<String>,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     CreatePlaylist {
         title: String,
         description: String,
@@ -73,14 +102,30 @@ pub enum Request {
         track: u64,
         etag: String,
     },
+    ContextPage {
+        user: u64,
+        generation: u64,
+        source: Continuation,
+    },
     Play {
         generation: u64,
         id: u64,
         quality: String,
+        position: u64,
     },
 }
 
 pub enum Event {
+    Credentials {
+        status: Result<crate::credentials::Status, String>,
+        warning: Option<String>,
+        dirty: bool,
+        finished: bool,
+    },
+    ContextPage {
+        generation: u64,
+        result: Result<ContextPage, String>,
+    },
     Playlist {
         generation: u64,
         page: PlaylistPage,
@@ -91,6 +136,17 @@ pub enum Event {
         title: String,
     },
     OwnedPlaylists(Vec<Playlist>),
+    QueuePlaylistCreated {
+        user: u64,
+        operation: u64,
+        result: Result<Playlist, String>,
+    },
+    QueueBatchSaved {
+        user: u64,
+        operation: u64,
+        offset: usize,
+        result: Result<String, String>,
+    },
     PlaylistCreated(Playlist),
     PlaylistEdited {
         id: String,
@@ -99,7 +155,18 @@ pub enum Event {
     PlaylistError(String),
     PkceReady(String),
     AuthKind(bool),
-    Session(Option<String>),
+    Session(Option<(u64, String)>),
+    Library {
+        generation: u64,
+        kind: FavoriteKind,
+        page: LibraryPage,
+        append: bool,
+    },
+    Favorite {
+        user: u64,
+        item: Favorite,
+        result: Result<bool, String>,
+    },
     Login {
         url: String,
         code: String,
@@ -132,6 +199,11 @@ pub enum Event {
     Playing {
         generation: u64,
         quality: String,
+    },
+    Listening {
+        generation: u64,
+        rendered: std::time::Duration,
+        elapsed: std::time::Duration,
     },
     Position {
         generation: u64,
@@ -192,19 +264,20 @@ impl Backend {
                     Ok(a) => a,
                     Err(e) => { events.send(Event::Error(e.to_string())); return; }
                 };
-                match store::load() {
+                match api.credentials.load().await {
                     Ok(session) => api.session = session,
-                    Err(e) => events.send(Event::Error(e.to_string())),
+                    Err(e) => api.credential_warning = Some(e.to_string()),
                 }
                 if api.session.is_some() {
                     match api.identify().await {
                         Ok(()) => {
                             events.send(Event::AuthKind(api.session.as_ref().is_some_and(|s| s.pkce)));
-                            events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
+                            events.send(Event::Session(api.session.as_ref().map(|s| (s.user_id, s.country.clone()))));
                         },
                         Err(e) => events.send(Event::Error(e.to_string())),
                     }
                 } else { events.send(Event::Session(None)); }
+                credential_event(&api, &events, false);
                 let mut pkce = None;
                 let mut login: Option<(DeviceLogin, Instant, Instant)> = None;
                 let mut ticker = tokio::time::interval(Duration::from_secs(1));
@@ -213,12 +286,13 @@ impl Backend {
                         request = requests.recv() => {
                             let Some(request) = request else { break; };
                             let request_generation = match &request {
-                                Request::Search { generation, .. } | Request::Favorites { generation, .. } |
+                                Request::Search { generation, .. } | Request::Library { generation, .. } |
                                 Request::Collection { generation, .. } | Request::Home { generation } |
                                 Request::Mix { generation, .. } | Request::Radio { generation, .. } |
                                 Request::Playlist { generation, .. } | Request::Track { generation, .. } | Request::Artist { generation, .. } => Some(*generation),
                                 _ => None,
                             };
+                            let credential_request = matches!(&request, Request::MigrateCredentials { .. } | Request::RetryCredentialSave | Request::ReloadCredentials | Request::CleanupCredentials | Request::Logout);
                             let playlist_edit = matches!(&request, Request::OwnedPlaylists | Request::CreatePlaylist { .. } | Request::AddToPlaylist { .. } | Request::RemoveFromPlaylist { .. });
                             let folder_id = match &request { Request::Folder { id } => Some(id.clone()), _ => None };
                             let playback_generation = match &request { Request::Play { generation, .. } => Some(*generation), _ => None };
@@ -235,7 +309,7 @@ impl Backend {
                                         api.finish_pkce(p, &redirect).await?;
                                         pkce = None;
                                         events.send(Event::AuthKind(true));
-                                        events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
+                                        events.send(Event::Session(api.session.as_ref().map(|s| (s.user_id, s.country.clone()))));
                                     }
                                     Request::Login => {
                                         let device = api.begin_login().await?;
@@ -248,17 +322,40 @@ impl Backend {
                                         login = None;
                                         pkce = None;
                                         audio.stop();
-                                        store::clear()?;
                                         api.session = None;
+                                        api.credentials_dirty = false;
+                                        api.credential_warning = api.credentials.clear().await.err().map(|error| format!("Saved credential removal could not be completed: {error}. Retry removal; a failed settings write may leave automatic sign-in enabled."));
                                         events.send(Event::Session(None));
+                                    }
+                                    Request::MigrateCredentials { user } => {
+                                        let session = api.session.as_ref().ok_or_else(|| anyhow::anyhow!("Sign in before migrating credentials"))?;
+                                        anyhow::ensure!(session.user_id == user && user != 0, "Account changed; credential migration was not started");
+                                        api.credential_warning = api.credentials.migrate(session).await.err().map(|error| format!("Credential migration needs attention: {error}. Previous credential copies were retained unless a verified replacement was committed."));
+                                        if api.credential_warning.is_none() { api.credentials_dirty = false; }
+                                    }
+                                    Request::RetryCredentialSave => api.persist_session().await,
+                                    Request::ReloadCredentials => {
+                                        if api.session.is_none() { api.session = api.credentials.load().await?; api.credential_warning = None; }
+                                        if api.session.is_some() {
+                                            api.identify().await?;
+                                            events.send(Event::AuthKind(api.session.as_ref().is_some_and(|s| s.pkce)));
+                                            events.send(Event::Session(api.session.as_ref().map(|s| (s.user_id, s.country.clone()))));
+                                        }
+                                    }
+                                    Request::CleanupCredentials => {
+                                        api.credential_warning = api.credentials.cleanup().await.err().map(|error| format!("Credential cleanup needs attention: {error}"));
                                     }
                                     Request::Search { generation, query } => {
                                         let data = api.search(&query).await?;
                                         events.send(Event::Search { generation, data });
                                     }
-                                    Request::Favorites { generation, offset } => {
-                                        let tracks = api.favorites(offset).await?;
-                                        events.send(Event::Tracks { generation, tracks, append: offset > 0 });
+                                    Request::Library { generation, kind, offset } => {
+                                        let page = api.library(kind, offset).await?;
+                                        events.send(Event::Library { generation, kind, page, append: offset > 0 });
+                                    }
+                                    Request::SetFavorite { user, item, saved } => {
+                                        let result = api.set_favorite(user, item, saved).await.map(|()| saved).map_err(|e| e.to_string());
+                                        events.send(Event::Favorite { user, item, result });
                                     }
                                     Request::Home { generation } => events.send(Event::Home { generation, home: api.home().await? }),
                                     Request::Folder { id } => {
@@ -280,6 +377,14 @@ impl Backend {
                                     Request::Track { generation, id } => events.send(Event::Tracks { generation, tracks: vec![api.track(id).await?], append: false }),
                                     Request::Artist { generation, id } => events.send(Event::Search { generation, data: api.artist(id).await? }),
                                     Request::OwnedPlaylists => events.send(Event::OwnedPlaylists(api.owned_playlists().await?)),
+                                    Request::CreateQueuePlaylist { user, operation, title, description, cancelled } => {
+                                        let result = api.create_queue_playlist(user, &title, &description, &cancelled).await.map_err(|error| error.to_string());
+                                        events.send(Event::QueuePlaylistCreated { user, operation, result });
+                                    }
+                                    Request::AppendQueueBatch { user, operation, id, tracks, offset, etag, cancelled } => {
+                                        let result = api.append_queue_batch(user, &id, &tracks, offset, etag.as_deref(), &cancelled).await.map_err(|error| error.to_string());
+                                        events.send(Event::QueueBatchSaved { user, operation, offset, result });
+                                    }
                                     Request::CreatePlaylist { title, description } => events.send(Event::PlaylistCreated(api.create_playlist(&title, &description).await?)),
                                     Request::AddToPlaylist { id, track } => {
                                         let added = api.add_to_playlist(&id, track).await?;
@@ -294,13 +399,17 @@ impl Backend {
                                         let tracks = api.collection(&kind, &id, offset).await?;
                                         events.send(Event::Tracks { generation, tracks, append: offset > 0 });
                                     }
-                                    Request::Play { generation, id, quality } => {
+                                    Request::ContextPage { user, generation, source } => {
+                                        let result = api.context_page(user, &source).await.map_err(|e| e.to_string());
+                                        events.send(Event::ContextPage { generation, result });
+                                    }
+                                    Request::Play { generation, id, quality, position } => {
                                         if !audio.current(generation) { return Ok(()); }
                                         let stream = api.stream(id, &quality).await?;
                                         let audio = audio.clone();
                                         let events = events.clone();
                                         tokio::spawn(async move {
-                                            if let Err(e) = audio.load(generation, stream).await {
+                                            if let Err(e) = audio.load(generation, stream, position).await {
                                                 events.send(Event::PlaybackError { generation, message: e.to_string() });
                                             }
                                         });
@@ -309,6 +418,7 @@ impl Backend {
                                 Ok(())
                             }.await;
                             if let Err(e) = result {
+                                if credential_request { api.credential_warning = Some(e.to_string()); }
                                 events.send(if playlist_edit { Event::PlaylistError(e.to_string()) } else if let Some(id) = folder_id {
                                     Event::FolderError { id, message: e.to_string() }
                                 } else if let Some(generation) = request_generation {
@@ -317,6 +427,7 @@ impl Backend {
                                     Event::PlaybackError { generation, message: e.to_string() }
                                 } else { Event::Error(e.to_string()) });
                             }
+                            credential_event(&api, &events, credential_request);
                         }
                         _ = ticker.tick(), if login.is_some() => {
                             let (device, start, next) = login.as_mut().unwrap();
@@ -330,7 +441,7 @@ impl Backend {
                                 Ok(LoginPoll::Complete) => {
                                     login = None;
                                     events.send(Event::AuthKind(false));
-                                    events.send(Event::Session(api.session.as_ref().map(|s| s.country.clone())));
+                                    events.send(Event::Session(api.session.as_ref().map(|s| (s.user_id, s.country.clone()))));
                                 }
                                 Ok(LoginPoll::Pending) => *next = Instant::now() + Duration::from_secs(device.interval.max(1)),
                                 Ok(LoginPoll::SlowDown) => {
@@ -339,6 +450,7 @@ impl Backend {
                                 }
                                 Err(e) => { login = None; events.send(Event::Error(e.to_string())); }
                             }
+                            credential_event(&api, &events, false);
                         }
                     }
                 }
@@ -346,6 +458,15 @@ impl Backend {
         });
         Self { tx, rx, player }
     }
+}
+
+fn credential_event(api: &Api, events: &Events, finished: bool) {
+    events.send(Event::Credentials {
+        status: api.credentials.status().map_err(|error| error.to_string()),
+        warning: api.credential_warning.clone(),
+        dirty: api.credentials_dirty,
+        finished,
+    });
 }
 
 fn login_url(value: &str) -> anyhow::Result<String> {

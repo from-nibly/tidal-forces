@@ -20,6 +20,7 @@ enum Command {
         Box<dyn Source<Item = f32> + Send>,
         String,
         Option<crate::dash::SeekHandle>,
+        u64,
     ),
     Pause(bool),
     Seek(u64),
@@ -35,6 +36,16 @@ pub struct Player {
 }
 
 impl Player {
+    #[cfg(any(test, debug_assertions))]
+    pub fn inert() -> Self {
+        let (tx, _) = mpsc::channel();
+        Self {
+            tx,
+            generation: Arc::new(AtomicU64::new(0)),
+            visualizer: Arc::new(crate::visualizer::Capture::default()),
+        }
+    }
+
     pub fn new(events: Events) -> Self {
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(0));
@@ -56,20 +67,29 @@ impl Player {
             let mut sink = Sink::connect_new(output.mixer());
             let mut volume = 0.65;
             let mut active = None;
+            let mut position_offset = 0;
             let mut seeker: Option<crate::dash::SeekHandle> = None;
+            let mut rendered = Arc::new(AtomicU64::new(0));
+            let mut clock_start = std::time::Instant::now();
+            let mut reported = 0;
             loop {
                 match rx.recv_timeout(Duration::from_millis(250)) {
-                    Ok(Command::Load(id, decoder, quality, seek_handle)) => {
+                    Ok(Command::Load(id, decoder, quality, seek_handle, start)) => {
                         if id != current.load(Ordering::SeqCst) {
                             continue;
                         }
                         sink.stop();
                         sink = Sink::connect_new(output.mixer());
                         sink.set_volume(volume);
+                        sink.pause();
+                        position_offset = start;
                         capture.invalidate();
-                        capture.playing(true);
+                        capture.playing(false);
+                        rendered = Arc::new(AtomicU64::new(0));
+                        clock_start = std::time::Instant::now();
+                        reported = 0;
                         sink.append(crate::visualizer::Tap::new(
-                            decoder,
+                            crate::audio_meter::Meter::new(decoder, rendered.clone()),
                             capture.clone(),
                             current.clone(),
                             id,
@@ -113,6 +133,8 @@ impl Player {
                         capture.playing(!paused);
                         if let Err(e) = result {
                             events.send(Event::Error(format!("Cannot seek this stream: {e}")));
+                        } else {
+                            position_offset = 0;
                         }
                     }
                     Ok(Command::Stop) => {
@@ -132,6 +154,15 @@ impl Player {
                         seeker = None;
                         continue;
                     }
+                    let nanos = rendered.load(Ordering::Relaxed);
+                    if nanos != reported {
+                        events.send(Event::Listening {
+                            generation: id,
+                            rendered: Duration::from_nanos(nanos),
+                            elapsed: clock_start.elapsed(),
+                        });
+                        reported = nanos;
+                    }
                     if sink.empty() {
                         capture.playing(false);
                         active = None;
@@ -140,7 +171,7 @@ impl Player {
                     } else if !sink.is_paused() {
                         events.send(Event::Position {
                             generation: id,
-                            seconds: sink.get_pos().as_secs(),
+                            seconds: sink.get_pos().as_secs().saturating_add(position_offset),
                         });
                     }
                 }
@@ -181,7 +212,7 @@ impl Player {
         let _ = self.tx.send(Command::Seek(seconds));
     }
 
-    pub async fn load(&self, id: u64, stream: Stream) -> Result<()> {
+    pub async fn load(&self, id: u64, stream: Stream, position: u64) -> Result<()> {
         if !self.current(id) {
             return Ok(());
         }
@@ -208,13 +239,41 @@ impl Player {
                 Box::new(source)
             }
         };
+        let (decoder, seeker) = prepare_start(decoder, seeker, position).await?;
         if self.current(id) {
             self.tx
-                .send(Command::Load(id, decoder, quality, seeker))
+                .send(Command::Load(id, decoder, quality, seeker, position))
                 .map_err(|_| anyhow::anyhow!("Audio output is unavailable"))?;
         }
         Ok(())
     }
+}
+
+async fn prepare_start(
+    mut decoder: Box<dyn Source<Item = f32> + Send>,
+    seeker: Option<crate::dash::SeekHandle>,
+    position: u64,
+) -> Result<(
+    Box<dyn Source<Item = f32> + Send>,
+    Option<crate::dash::SeekHandle>,
+)> {
+    if position == 0 {
+        return Ok((decoder, seeker));
+    }
+    // Resolve the saved position before the decoder ever reaches the mixer.
+    tokio::task::spawn_blocking(move || {
+        let position = Duration::from_secs(position);
+        if let Some(seeker) = &seeker {
+            seeker.prepare(position)?;
+        }
+        decoder.try_seek(position).map_err(|_| {
+            anyhow::anyhow!(
+                "Could not prepare the saved position. Seek to the beginning to restart this track."
+            )
+        })?;
+        Ok((decoder, seeker))
+    })
+    .await?
 }
 
 pub(crate) async fn decode(reader: StreamDownload<TempStorageProvider>) -> Result<AudioDecoder> {
@@ -244,4 +303,59 @@ pub fn audio_test() -> Result<()> {
     sink.sleep_until_end();
     println!("Audio device opened and rendered 150 ms of test audio.");
     Ok(())
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn saved_position_is_prepared_before_append_and_sink_waits_for_explicit_play() {
+        let samples: Vec<f32> = (0..1000).map(|index| index as f32 / 1000.).collect();
+        let source = rodio::buffer::SamplesBuffer::new(1, 100, samples);
+        let (source, _) = prepare_start(Box::new(source), None, 3).await.unwrap();
+        let (sink, mut output) = Sink::new();
+        sink.pause();
+        sink.append(source);
+        for _ in 0..100 {
+            assert_eq!(output.next(), Some(0.));
+        }
+        assert_eq!(sink.get_pos(), Duration::ZERO);
+        sink.play();
+        let first = output
+            .by_ref()
+            .take(100)
+            .find(|sample| *sample != 0.)
+            .unwrap();
+        assert!(
+            (first - 0.3).abs() < 0.0001,
+            "Resumed at the wrong sample: {first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unseekable_resume_fails_instead_of_playing_the_beginning() {
+        struct Unseekable;
+        impl Iterator for Unseekable {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                Some(0.)
+            }
+        }
+        impl Source for Unseekable {
+            fn current_span_len(&self) -> Option<usize> {
+                None
+            }
+            fn channels(&self) -> u16 {
+                1
+            }
+            fn sample_rate(&self) -> u32 {
+                100
+            }
+            fn total_duration(&self) -> Option<Duration> {
+                None
+            }
+        }
+        assert!(prepare_start(Box::new(Unseekable), None, 5).await.is_err());
+    }
 }
