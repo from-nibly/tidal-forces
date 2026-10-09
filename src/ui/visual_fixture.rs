@@ -8,6 +8,7 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
     anyhow::ensure!(
         [
             "collection",
+            "selection",
             "home",
             "albums",
             "artists",
@@ -201,7 +202,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     app.position = 84;
     app.actual_quality = "FIXTURE · FLAC 16/44.1".into();
-    app.queue_open = matches!(page, "collection" | "history");
+    app.queue_open = matches!(page, "collection" | "selection" | "history");
     app.folders.insert(
         "root".into(),
         ["Night drives", "Slow mornings"]
@@ -229,7 +230,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             });
         app.folders.insert(id.into(), Vec::new());
     }
-    if page == "collection" {
+    if matches!(page, "collection" | "selection") {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
                 uuid: "fixture-0".into(),
@@ -289,6 +290,13 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             title: "Night drives".into(),
         },
     };
+    if page == "selection" {
+        app.track_selection
+            .sync(app.account, app.generation, app.tracks.len());
+        for row in [0, 1, 3] {
+            app.track_selection.select(row, true, false);
+        }
+    }
     app
 }
 

@@ -7,6 +7,7 @@ pub(super) const BORDER: Color32 = Color32::from_rgb(43, 47, 53);
 pub(super) const MUTED: Color32 = Color32::from_rgb(151, 155, 165);
 pub(super) const ACCENT: Color32 = Color32::from_rgb(81, 225, 219);
 pub(super) const PLAYING: Color32 = Color32::from_rgb(21, 37, 39);
+pub(super) const SELECTED: Color32 = Color32::from_rgb(20, 46, 48);
 pub(super) const TEXT: Color32 = Color32::from_rgb(241, 242, 245);
 
 pub(super) fn configure(ctx: &egui::Context) {

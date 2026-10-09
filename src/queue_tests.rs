@@ -22,6 +22,51 @@ fn upcoming(queue: &Queue) -> Vec<u64> {
 }
 
 #[test]
+fn bulk_queue_addition_is_ordered_duplicate_safe_and_atomic() {
+    for next in [false, true] {
+        let mut q = queue();
+        q.add(track(8), false).unwrap();
+        let current = q.current_entry().unwrap().occurrence;
+        let source = upcoming(&q);
+        q.add_many(vec![track(9), track(9), track(10)], next)
+            .unwrap();
+        assert_eq!(
+            q.manual().iter().map(|e| e.track.id).collect::<Vec<_>>(),
+            if next {
+                vec![9, 9, 10, 8]
+            } else {
+                vec![8, 9, 9, 10]
+            }
+        );
+        assert_eq!(
+            q.manual()
+                .iter()
+                .map(|e| e.occurrence)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            4
+        );
+        assert_eq!(q.current_entry().unwrap().occurrence, current);
+        assert_eq!(upcoming(&q), source);
+        let before = serde_json::to_value(&q).unwrap();
+        assert!(
+            q.add_many(vec![track(2), track(0), track(3)], next)
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&q).unwrap(), before);
+        assert!(q.add_many(vec![track(2); MAX_ENTRIES], next).is_err());
+        assert_eq!(serde_json::to_value(&q).unwrap(), before);
+        q.add_many(Vec::new(), next).unwrap();
+        assert_eq!(serde_json::to_value(&q).unwrap(), before);
+        q.next_id = u64::MAX - 1;
+        let before = serde_json::to_value(&q).unwrap();
+        assert!(q.add_many(vec![track(2), track(3)], next).is_err());
+        assert_eq!(serde_json::to_value(&q).unwrap(), before);
+        assert!(q.validate().is_ok());
+    }
+}
+
+#[test]
 fn explicit_collection_start_keeps_every_occurrence_and_preserves_manual_order() {
     for shuffle in [false, true] {
         let mut q = queue();

@@ -258,6 +258,29 @@ impl Queue {
         Ok(())
     }
 
+    /// Validate the whole batch before changing IDs or queue state. Prepending
+    /// preserves the selected source order, including duplicate track IDs.
+    pub fn add_many(&mut self, tracks: Vec<Track>, play_next: bool) -> Result<()> {
+        self.capacity(tracks.len())?;
+        ensure!(
+            tracks.iter().all(|track| track.id != 0),
+            "Invalid track in selection"
+        );
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        let entries: Vec<_> = tracks.into_iter().map(|track| self.entry(track)).collect();
+        if play_next {
+            for entry in entries.into_iter().rev() {
+                self.manual.push_front(entry);
+            }
+        } else {
+            self.manual.extend(entries);
+        }
+        self.changed();
+        Ok(())
+    }
+
     pub fn append(&mut self, tracks: Vec<Track>, continuation: Option<Continuation>) -> Result<()> {
         self.capacity(tracks.len())?;
         ensure!(

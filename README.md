@@ -162,6 +162,25 @@ advanced audio tools and Google Cast remain pending. Genuine TIDAL
 Connect remains separately gated; there is no network discovery or laptop receiver
 enabled.
 
+## P3a track selection (v0.9.0)
+
+Track tables now support checkboxes, Ctrl/Shift-click selection, Shift+Up/Down/Home/End
+ranges, and Ctrl+A for **loaded** tracks. Selection identifies source occurrences,
+so duplicate track IDs remain independent. It survives appended pages, but clears
+on replacement, refresh, navigation or account changes; cached view restoration is
+still future work.
+
+**Copy links** (or Ctrl+C with table focus) copies public TIDAL track URLs in source
+order, preserving duplicates. Text fields retain their own clipboard shortcuts.
+**Selection actions** adds the batch to Up next or prepends it with Play next while
+preserving its order. The entire batch is validated before changing the queue;
+invalid IDs, capacity or occurrence exhaustion cannot leave a partial addition.
+
+This is the first P3 slice, not completion of library power tools. Filtering,
+sorting, caches, multi-link paste, bulk account writes, metadata editing, playlist
+reordering and pins remain pending. Ctrl+C copies links; Ctrl+V into a playlist is
+not yet implemented. These additions follow in subsequent reviewed versions.
+
 ## Queue and paused restore
 
 Successful startup restoration is silent; actionable errors remain visible.

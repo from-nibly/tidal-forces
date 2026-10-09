@@ -26,6 +26,7 @@ mod settings;
 use library::favorite_button;
 #[cfg(test)]
 mod player_bar_tests;
+mod selection;
 mod surfaces;
 #[cfg(test)]
 mod tests;
@@ -89,6 +90,7 @@ pub struct App {
     query: String,
     focus_search: bool,
     tracks: Vec<Track>,
+    track_selection: selection::Selection,
     albums: Vec<Album>,
     artists: Vec<Artist>,
     mixes: Vec<Mix>,
@@ -204,6 +206,7 @@ impl App {
             query: String::new(),
             focus_search: false,
             tracks: vec![],
+            track_selection: selection::Selection::default(),
             albums: vec![],
             artists: vec![],
             mixes: vec![],
@@ -352,6 +355,7 @@ impl App {
         self.playlist_page = None;
         self.generation += 1;
         self.tracks.clear();
+        self.track_selection.clear();
         self.albums.clear();
         self.artists.clear();
         self.more = false;
@@ -539,6 +543,9 @@ impl App {
                         rows.append(&mut page.rows);
                         page.rows = rows;
                     }
+                    if !append {
+                        self.track_selection.clear();
+                    }
                     self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
                     self.more = page.more;
                     if let Page::Collection { title, .. } = &mut self.page {
@@ -694,6 +701,7 @@ impl App {
                     append,
                 } if generation == self.generation => {
                     if !append {
+                        self.track_selection.clear();
                         self.favorites.invalidate(kind);
                     }
                     for id in page
@@ -744,6 +752,7 @@ impl App {
                     }
                 }
                 Event::Search { generation, data } if generation == self.generation => {
+                    self.track_selection.clear();
                     self.tracks = data.tracks;
                     self.albums = data.albums;
                     self.artists = data.artists;
@@ -758,6 +767,7 @@ impl App {
                     if append {
                         self.tracks.extend(tracks);
                     } else {
+                        self.track_selection.clear();
                         self.tracks = tracks;
                     }
                     self.loading = false;
@@ -771,6 +781,7 @@ impl App {
                 Event::Home { generation, home } if generation == self.generation => {
                     self.daily = home.daily;
                     self.mixes = home.mixes;
+                    self.track_selection.clear();
                     self.tracks = home.tracks;
                     self.loading = false;
                     self.more = false;
@@ -784,6 +795,7 @@ impl App {
                     self.error = Some(message);
                 }
                 Event::Radio { generation, tracks } if generation == self.generation => {
+                    self.track_selection.clear();
                     self.tracks = tracks;
                     self.loading = false;
                     self.more = false;
@@ -1758,6 +1770,9 @@ impl App {
                     .margin(vec2(0., 3.)),
             )
             .on_hover_text("Search music or paste a TIDAL link · Ctrl+K");
+        if response.has_focus() || self.focus_search {
+            self.track_selection.pending_focus = None;
+        }
         if self.focus_search {
             if ui.is_enabled() {
                 if ui.ctx().content_rect().width() < 1180. {

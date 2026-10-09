@@ -1,7 +1,7 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.8.0 approved for publication and installation; P3 is next.**
-Previous published baseline: v0.4.0 (`83b4051`).
+**Status: v0.9.0 P3a approved for publication/installation; playlist paste is next.**
+Published baseline: v0.8.0 (`63a05c178fe1`).
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -16,6 +16,32 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Current P3a slice
+
+The approved v0.9.0 slice adds source-occurrence selection to the
+shared track table: checkboxes with mixed select-all state, Ctrl/Shift-click,
+keyboard ranges across virtualized rows, loaded-only select-all and scoped copy
+shortcuts. Copied public track links retain source order and duplicates; text
+fields keep native selection/clipboard behavior. Bulk Play next/Add to Up next
+validates the whole batch before mutation and preserves ordered duplicate entries.
+Selection survives page append but resets on replacement, refresh, navigation or
+account changes. Existing raw playlist occurrence indices, ETag checks and removal
+confirmation remain unchanged.
+
+Validation: 148 normal tests, strict Clippy/fmt, isolated single-instance/Secret
+Service contracts, debug build and release-mode check pass. Pointer tests cover
+range/toggle/check-box selection without autoplay, clipboard ownership and duplicate
+copying, guarded raw-index removal, and keyboard navigation to the 10,000th virtual
+row. Capacity/ID exhaustion tests verify atomic queue failure. Isolated native
+smoke and synthetic layout captures were checked; no live account mutation or
+system-clipboard probing was performed.
+
+P3 is not complete. Filter/sort, clipboard paste, caches (including favorite
+membership), safe bulk account operations, playlist metadata/reorder, local pins,
+and capability-gated folder/cover work remain. The user approved this slice for
+publication/installation and continuation; track-link paste into owned playlists
+is the next reviewable slice. No live mutation testing is implied by that approval.
 
 ## Implementation history
 
