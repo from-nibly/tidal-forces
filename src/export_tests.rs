@@ -6,44 +6,181 @@ fn metadata(count: usize) -> Value {
     json!({"uuid":"test-list","type":"USER","title":"Export","numberOfTracks":count,"numberOfVideos":0,"creator":{"id":7}})
 }
 #[tokio::test]
-async fn queue_batch_preserves_duplicates_and_verifies_order_at_the_write_revision() {
-    let mut post = step("POST", "/v1/playlists/test-list/items", json!({}));
-    post.etag = "\"revision-2\"";
-    post.contains = vec![
-        "trackIds=9%2C9%2C10",
-        "onDupes=ADD",
-        "onArtifactNotFound=FAIL",
-        "toIndex=0",
-        "if-none-match: \"revision-1\"",
-    ];
-    let mut after = step("GET", "/v1/playlists/test-list", metadata(3));
-    after.etag = post.etag;
-    let mut page = step(
-        "GET",
-        "/v1/playlists/test-list/items",
-        json!({"totalNumberOfItems":3,"items":[
-        {"type":"track","item":{"id":9,"title":"Test"}}, {"type":"track","item":{"id":9,"title":"Test"}}, {"type":"track","item":{"id":10,"title":"Test"}}]}),
-    );
-    page.etag = post.etag;
+async fn duplicate_check_reads_revision_pinned_pages_without_writing() {
+    let items = |ids: &[u64]| json!({"totalNumberOfItems":3,"items":ids.iter().map(|id|json!({"type":"track","item":{"id":id,"title":"Synthetic"}})).collect::<Vec<_>>()});
+    let mut last = step("GET", "/v1/playlists/test-list/items", items(&[11]));
+    last.contains = vec!["offset=2"];
     let (mut api, server) = mock(vec![
-        step("GET", "/v1/playlists/test-list", metadata(0)),
-        post,
-        after,
-        page,
+        step("GET", "/v1/playlists/test-list", metadata(3)),
+        step("GET", "/v1/playlists/test-list/items", items(&[9, 10])),
+        step("GET", "/v1/playlists/test-list", metadata(3)),
+        last,
     ]);
-    let etag = api
-        .append_queue_batch(
+    let ids = api
+        .playlist_duplicate_page(
             7,
             "test-list",
-            &[9, 9, 10],
             0,
-            None,
+            3,
+            "\"revision-1\"",
             &AtomicBool::new(false),
         )
         .await
         .unwrap();
-    assert_eq!(etag, "\"revision-2\"");
+    assert_eq!(ids, [9, 10]);
+    let ids = api
+        .playlist_duplicate_page(
+            7,
+            "test-list",
+            2,
+            3,
+            "\"revision-1\"",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids, [11]);
     server.join().unwrap();
+}
+#[tokio::test]
+async fn duplicate_check_accepts_an_empty_playlist() {
+    let (mut api, server) = mock(vec![
+        step("GET", "/v1/playlists/test-list", metadata(0)),
+        step(
+            "GET",
+            "/v1/playlists/test-list/items",
+            json!({"totalNumberOfItems":0,"items":[]}),
+        ),
+    ]);
+    assert!(
+        api.playlist_duplicate_page(
+            7,
+            "test-list",
+            0,
+            0,
+            "\"revision-1\"",
+            &AtomicBool::new(false)
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    server.join().unwrap();
+}
+#[tokio::test]
+async fn duplicate_check_refuses_unavailable_rows_changes_and_cancellation() {
+    for case in ["unavailable", "revision", "count", "owner", "cancel"] {
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let mut first = metadata(2);
+        if case == "owner" {
+            first["creator"]["id"] = json!(8);
+        }
+        let mut page = step(
+            "GET",
+            "/v1/playlists/test-list/items",
+            json!({"totalNumberOfItems":2,"items":[if case=="unavailable" {json!({"type":"track","item":null})} else {json!({"type":"track","item":{"id":9,"title":"Synthetic"}})}]}),
+        );
+        if case == "cancel" {
+            let flag = cancelled.clone();
+            page.on_request = Some(Box::new(move || {
+                flag.store(true, std::sync::atomic::Ordering::Release)
+            }));
+        }
+        let mut steps = vec![step("GET", "/v1/playlists/test-list", first), page];
+        if case == "revision" {
+            let mut changed = step("GET", "/v1/playlists/test-list", metadata(2));
+            changed.etag = "\"revision-2\"";
+            steps.push(changed);
+        }
+        if case == "count" {
+            steps.push(step("GET", "/v1/playlists/test-list", metadata(3)));
+            steps.push(step(
+                "GET",
+                "/v1/playlists/test-list/items",
+                json!({"totalNumberOfItems":2,"items":[{"type":"track","item":{"id":10,"title":"Synthetic"}}]}),
+            ));
+        }
+        let (mut api, server) = mock(steps);
+        let result = api
+            .playlist_duplicate_page(7, "test-list", 0, 2, "\"revision-1\"", &cancelled)
+            .await;
+        if case == "revision" || case == "count" {
+            assert_eq!(result.unwrap(), [9]);
+            assert!(
+                api.playlist_duplicate_page(7, "test-list", 1, 2, "\"revision-1\"", &cancelled)
+                    .await
+                    .is_err(),
+                "{case}"
+            );
+        } else {
+            assert!(result.is_err(), "{case}");
+        }
+        server.join().unwrap();
+    }
+    for user in [0, 8] {
+        let (mut api, server) = mock(vec![]);
+        assert!(
+            api.playlist_duplicate_page(
+                user,
+                "test-list",
+                0,
+                0,
+                "\"revision-1\"",
+                &AtomicBool::new(false)
+            )
+            .await
+            .is_err()
+        );
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn queue_batch_preserves_duplicates_and_verifies_order_at_the_write_revision() {
+    for offset in [0, 7] {
+        let mut post = step("POST", "/v1/playlists/test-list/items", json!({}));
+        post.etag = "\"revision-2\"";
+        post.contains = vec![
+            "trackIds=9%2C9%2C10",
+            "onDupes=ADD",
+            "onArtifactNotFound=FAIL",
+            if offset == 0 {
+                "toIndex=0"
+            } else {
+                "toIndex=7"
+            },
+            "if-none-match: \"revision-1\"",
+        ];
+        let mut after = step("GET", "/v1/playlists/test-list", metadata(offset + 3));
+        after.etag = post.etag;
+        let mut page = step(
+            "GET",
+            "/v1/playlists/test-list/items",
+            json!({"totalNumberOfItems":offset+3,"items":[
+        {"type":"track","item":{"id":9,"title":"Test"}}, {"type":"track","item":{"id":9,"title":"Test"}}, {"type":"track","item":{"id":10,"title":"Test"}}]}),
+        );
+        page.etag = post.etag;
+        page.contains = vec![if offset == 0 { "offset=0" } else { "offset=7" }];
+        let (mut api, server) = mock(vec![
+            step("GET", "/v1/playlists/test-list", metadata(offset)),
+            post,
+            after,
+            page,
+        ]);
+        let etag = api
+            .append_queue_batch(
+                7,
+                "test-list",
+                &[9, 9, 10],
+                offset,
+                (offset != 0).then_some("\"revision-1\""),
+                &AtomicBool::new(false),
+            )
+            .await
+            .unwrap();
+        assert_eq!(etag, "\"revision-2\"");
+        server.join().unwrap();
+    }
 }
 #[tokio::test]
 async fn queue_export_rejects_account_changes_cancellation_and_unsafe_batches_before_requests() {

@@ -1,7 +1,7 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.9.0 P3a approved for publication/installation; playlist paste is next.**
-Published baseline: v0.8.0 (`63a05c178fe1`).
+**Status: v0.10.0 playlist paste approved for publication and installation.**
+Published baseline: v0.9.0 (`782b0cea0d4e`).
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -17,7 +17,41 @@ Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
 
-## Current P3a slice
+## Approved P3b slice
+
+The approved v0.10.0 slice adds Ctrl+V/Paste tracks on loaded,
+owned audio-only playlists. Strict clipboard parsing preserves link order and
+repeats, rejects invalid/mixed content atomically, and limits input to 4 MiB and
+50,000 links. Text edits and other dialogs retain paste ownership. Explicit
+clipboard requests freeze account/generation/destination/revision and cannot be
+rebound after navigation or account changes.
+
+The confirmation uses brief, plain language. Before enabling Add songs, the app
+checks every destination page against its pinned revision, yielding between pages
+to other backend requests. It skips existing tracks and repeated copied tracks by
+default, shows the skipped count, and offers Add duplicates too. Unknown/unavailable
+rows or failed checks block confirmation rather than guessing. Changes after checking
+are caught by the existing write guards.
+
+An explicit confirmation precedes every write. Paste reuses the queue export's
+bounded, cancellation-aware append/read-back engine, starting after the existing
+track count rather than creating a playlist. Each batch requires fresh ownership,
+count and revision checks and an exact ordered tail read-back pinned to the write
+ETag. Failures retain destination/progress without retries or deletion; cancellation
+cannot undo in-flight requests. Completion refreshes the destination view without
+changing playback. Unsupported video/read-only/unversioned destinations are refused.
+
+Parser, nonzero-offset API contracts, 205-entry duplicate batching, confirmation,
+text-edit ownership, stale clipboard targets and cancellation/failure tests are
+synthetic. No live account mutation or system-clipboard probing was performed.
+Validation including duplicate-check feedback: 161 normal tests, strict Clippy/fmt,
+isolated D-Bus contracts, debug build, release-mode check and isolated native smoke pass. Native collection layouts
+were checked at normal/minimum/150% sizes; synthetic pointer tests prove the narrow
+confirmation button is the first write, with duplicate skipping and opt-in inclusion.
+The user reviewed the updated native preview and approved publication, installation
+and continuation after the wording and duplicate-handling feedback was resolved.
+
+## Approved P3a slice
 
 The approved v0.9.0 slice adds source-occurrence selection to the
 shared track table: checkboxes with mixed select-all state, Ctrl/Shift-click,
@@ -37,11 +71,10 @@ row. Capacity/ID exhaustion tests verify atomic queue failure. Isolated native
 smoke and synthetic layout captures were checked; no live account mutation or
 system-clipboard probing was performed.
 
-P3 is not complete. Filter/sort, clipboard paste, caches (including favorite
-membership), safe bulk account operations, playlist metadata/reorder, local pins,
-and capability-gated folder/cover work remain. The user approved this slice for
-publication/installation and continuation; track-link paste into owned playlists
-is the next reviewable slice. No live mutation testing is implied by that approval.
+P3 is not complete. Filter/sort, caches (including favorite membership), safe bulk
+account operations, playlist metadata/reorder, local pins, and capability-gated
+folder/cover work remain. Filtering/sorting is the next reviewable slice. No live
+mutation testing is implied by release approval.
 
 ## Implementation history
 

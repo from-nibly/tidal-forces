@@ -12,6 +12,9 @@ pub(super) struct Credentials {
     allow_exit: bool,
 }
 impl App {
+    pub(super) fn credential_close_pending(&self) -> bool {
+        self.credentials.confirm_exit
+    }
     pub(super) fn credential_close_guard(&mut self, ctx: &egui::Context) {
         if !self.credentials.dirty && !self.credentials.busy {
             self.credentials.confirm_exit = false;

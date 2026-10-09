@@ -766,6 +766,60 @@ impl Api {
         self.create_playlist(title, description).await
     }
 
+    pub async fn playlist_duplicate_page(
+        &mut self,
+        user: u64,
+        id: &str,
+        offset: usize,
+        count: usize,
+        expected: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<u64>> {
+        use std::sync::atomic::Ordering;
+        anyhow::ensure!(
+            !expected.trim().is_empty() && count <= crate::queue::MAX_ENTRIES && offset <= count,
+            "Cannot check these songs for duplicates"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Duplicate check cancelled"
+        );
+        anyhow::ensure!(
+            user != 0
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.user_id == user),
+            "Account changed; paste again"
+        );
+        let page = self.playlist_page(id, offset, Some(expected)).await?;
+        anyhow::ensure!(
+            page.editable && page.playlist.uuid == id && page.playlist.number_of_videos == 0,
+            "This playlist cannot be edited"
+        );
+        anyhow::ensure!(
+            page.playlist.number_of_tracks == count as u64
+                && page.next_offset <= count
+                && page.more == (page.next_offset < count),
+            "The playlist changed. Refresh it and paste again."
+        );
+        anyhow::ensure!(
+            page.rows.len() == page.next_offset - offset
+                && page.rows.iter().all(|(_, track)| track.id != 0),
+            "Some songs could not be checked for duplicates. Nothing has been added."
+        );
+        anyhow::ensure!(
+            !page.more || page.next_offset > offset,
+            "Could not finish checking this playlist"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Duplicate check cancelled"
+        );
+        Ok(page.rows.into_iter().map(|(_, track)| track.id).collect())
+    }
+
+    /// Shared verified append path for queue export and clipboard playlist paste.
     pub async fn append_queue_batch(
         &mut self,
         user: u64,
@@ -778,7 +832,7 @@ impl Api {
         use std::sync::atomic::Ordering;
         anyhow::ensure!(
             !cancelled.load(Ordering::Acquire),
-            "Queue export was cancelled"
+            "Playlist append was cancelled"
         );
         anyhow::ensure!(
             user != 0
@@ -786,7 +840,7 @@ impl Api {
                     .session
                     .as_ref()
                     .is_some_and(|session| session.user_id == user),
-            "Account changed; queue export was stopped"
+            "Account changed; playlist append was stopped"
         );
         anyhow::ensure!(
             !tracks.is_empty()
@@ -796,7 +850,7 @@ impl Api {
                     .checked_add(tracks.len())
                     .is_some_and(|end| end <= 50_000)
                 && (offset == 0 || expected.is_some()),
-            "Invalid queue export batch"
+            "Invalid playlist append batch"
         );
         let (playlist, etag) = self.playlist_metadata(id).await?;
         anyhow::ensure!(
@@ -812,7 +866,7 @@ impl Api {
         );
         anyhow::ensure!(
             !cancelled.load(Ordering::Acquire),
-            "Queue export was cancelled before the next write"
+            "Playlist append was cancelled before the next write"
         );
         let track_ids = tracks
             .iter()
@@ -834,10 +888,10 @@ impl Api {
                 Some(&etag),
             )
             .await?;
-        let written_revision = response.headers().get("etag").context("TIDAL did not return an export revision. The playlist may contain this batch; inspect it before retrying")?.to_str()?.to_owned();
+        let written_revision = response.headers().get("etag").context("TIDAL did not return a write revision. The playlist may contain this batch; inspect it before retrying")?.to_str()?.to_owned();
         anyhow::ensure!(
             !written_revision.trim().is_empty(),
-            "Export revision is empty. The playlist may contain this batch; inspect it before retrying"
+            "Write revision is empty. The playlist may contain this batch; inspect it before retrying"
         );
         // Pin read-back to the write revision, not an intervening external edit.
         let page = self
@@ -857,7 +911,7 @@ impl Api {
                     .enumerate()
                     .all(|(i, ((position, track), wanted))| *position == offset + i
                         && track.id == *wanted),
-            "Could not verify the exported batch. The playlist may be partially filled; inspect it before retrying"
+            "Could not verify the appended batch. Some tracks may have been added; inspect the playlist before retrying"
         );
         Ok(page.etag)
     }

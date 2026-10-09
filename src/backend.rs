@@ -79,6 +79,15 @@ pub enum Request {
         description: String,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
+    CheckPlaylistDuplicates {
+        user: u64,
+        operation: u64,
+        id: String,
+        offset: usize,
+        count: usize,
+        etag: String,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     AppendQueueBatch {
         user: u64,
         operation: u64,
@@ -140,6 +149,12 @@ pub enum Event {
         user: u64,
         operation: u64,
         result: Result<Playlist, String>,
+    },
+    PlaylistDuplicatesChecked {
+        user: u64,
+        operation: u64,
+        offset: usize,
+        result: Result<Vec<u64>, String>,
     },
     QueueBatchSaved {
         user: u64,
@@ -380,6 +395,10 @@ impl Backend {
                                     Request::CreateQueuePlaylist { user, operation, title, description, cancelled } => {
                                         let result = api.create_queue_playlist(user, &title, &description, &cancelled).await.map_err(|error| error.to_string());
                                         events.send(Event::QueuePlaylistCreated { user, operation, result });
+                                    }
+                                    Request::CheckPlaylistDuplicates { user, operation, id, offset, count, etag, cancelled } => {
+                                        let result = api.playlist_duplicate_page(user, &id, offset, count, &etag, &cancelled).await.map_err(|e| e.to_string());
+                                        events.send(Event::PlaylistDuplicatesChecked { user, operation, offset, result });
                                     }
                                     Request::AppendQueueBatch { user, operation, id, tracks, offset, etag, cancelled } => {
                                         let result = api.append_queue_batch(user, &id, &tracks, offset, etag.as_deref(), &cancelled).await.map_err(|error| error.to_string());

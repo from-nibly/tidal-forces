@@ -178,8 +178,30 @@ invalid IDs, capacity or occurrence exhaustion cannot leave a partial addition.
 
 This is the first P3 slice, not completion of library power tools. Filtering,
 sorting, caches, multi-link paste, bulk account writes, metadata editing, playlist
-reordering and pins remain pending. Ctrl+C copies links; Ctrl+V into a playlist is
-not yet implemented. These additions follow in subsequent reviewed versions.
+reordering and pins remain pending. v0.10 adds confirmed playlist paste as described
+below.
+
+## Playlist paste (v0.10.0)
+
+On a loaded, owned audio-only playlist, **Ctrl+V** or **Paste tracks…** prepares a
+confirmation for copied TIDAL track links. Text fields keep their own paste
+behavior. Links must all be valid official TIDAL track links; malformed or mixed
+content is rejected without echoing clipboard data. The app checks the whole playlist
+and skips duplicates by default, including repeats in the copied songs. The popup
+shows how many will be skipped; **Add duplicates too** keeps the original order and
+repeats instead. Input is limited to 4 MiB / 50,000 links and destinations to 50,000
+songs. Nothing can be added until the duplicate check finishes successfully.
+
+Nothing is written until **Add songs** is confirmed. The
+existing verified append engine sends batches of at most 100, checks the current
+account/ownership/count/revision, and pins exact tail read-back to the write ETag.
+The destination is frozen while confirmation is open. Cancellation stops future
+batches, not an in-flight write. Uncertain writes stop without automatic retry or
+rollback; inspect the destination before trying again. Video-containing, read-only
+or unversioned destinations are not eligible.
+
+Confirmation performs a real account edit. Automated validation uses isolated
+protocol fixtures, not live account mutations.
 
 ## Queue and paused restore
 

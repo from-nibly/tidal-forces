@@ -256,10 +256,11 @@ impl App {
     fn try_send(&mut self, r: Request) -> bool {
         if let Err(error) = self.backend.tx.try_send(r) {
             match error.into_inner() {
-                Request::CreateQueuePlaylist { .. } | Request::AppendQueueBatch { .. } => self
-                    .export_error(
-                        "The queue export request was not accepted; no new batch was sent.".into(),
-                    ),
+                Request::CreateQueuePlaylist { .. }
+                | Request::AppendQueueBatch { .. }
+                | Request::CheckPlaylistDuplicates { .. } => self.export_error(
+                    "The queue export request was not accepted; no new batch was sent.".into(),
+                ),
                 Request::MigrateCredentials { .. }
                 | Request::RetryCredentialSave
                 | Request::ReloadCredentials
@@ -477,6 +478,12 @@ impl App {
                     operation,
                     result,
                 } => self.export_created(user, operation, result),
+                Event::PlaylistDuplicatesChecked {
+                    user,
+                    operation,
+                    offset,
+                    result,
+                } => self.playlist_duplicates_checked(user, operation, offset, result),
                 Event::QueueBatchSaved {
                     user,
                     operation,
@@ -1962,6 +1969,7 @@ impl App {
                     if surfaces::action_button(ui,Icon::Play,"Play",true).on_hover_text("Play this collection in source order · Manual Up next is preserved").clicked() { self.play_collection(false); }
                     if surfaces::action_button(ui,Icon::Shuffle,"Shuffle",false).on_hover_text("Start with a random loaded track; remaining source pages join the shuffle as they load. Manual Up next stays ordered.").clicked() { self.play_collection(true); }
                 });
+                if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
                 if let Some(page) = &self.playlist_page {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                         ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
@@ -2480,6 +2488,7 @@ impl eframe::App for App {
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
         self.export_window(ctx);
+        self.handle_track_paste(ctx);
         self.prefetch_context();
         self.export_tick();
         self.queue_drag_cursor(ctx);

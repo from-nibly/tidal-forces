@@ -11,6 +11,34 @@ pub enum Link {
 }
 
 impl Link {
+    pub fn parse_tracks(value: &str) -> Result<Vec<u64>> {
+        ensure!(
+            value.len() <= 4 * 1024 * 1024,
+            "Clipboard track links exceed the 4 MiB limit"
+        );
+        let mut tracks = Vec::new();
+        for (index, link) in value.split_whitespace().enumerate() {
+            ensure!(
+                index < crate::queue::MAX_ENTRIES,
+                "Paste is limited to 50,000 track links"
+            );
+            let Ok(Self::Track(id)) = Self::parse(link) else {
+                // Clipboard contents may be sensitive: never include them or a
+                // nested URL parser error in diagnostics.
+                bail!(
+                    "Clipboard item {} is not a valid TIDAL track link",
+                    index + 1
+                );
+            };
+            tracks.push(id);
+        }
+        ensure!(
+            !tracks.is_empty(),
+            "Copy one or more TIDAL track links first"
+        );
+        Ok(tracks)
+    }
+
     pub fn parse(value: &str) -> Result<Self> {
         ensure!(
             value.len() <= 4096 && !value.bytes().any(|b| b <= 32),
@@ -187,6 +215,24 @@ mod tests {
         );
         assert!(Instance::start(Some("tidal://login/auth?code=secret")).is_err());
         assert!(primary.events.try_recv().is_err());
+    }
+
+    #[test]
+    fn pasted_track_links_are_atomic_bounded_and_keep_duplicates() {
+        assert_eq!(Link::parse_tracks("  tidal://track/9\r\nhttps://tidal.com/browse/track/9?u=share\n https://listen.tidal.com/track/2 ").unwrap(),[9,9,2]);
+        for invalid in [
+            "",
+            "tidal://album/9",
+            "tidal://track/9 tidal://track/0",
+            "tidal://track/9 https://example.com/private-secret",
+        ] {
+            let error = Link::parse_tracks(invalid).unwrap_err().to_string();
+            assert!(!error.contains("private-secret"));
+        }
+        assert!(Link::parse_tracks(&"x".repeat(4 * 1024 * 1024 + 1)).is_err());
+        assert!(
+            Link::parse_tracks(&"tidal://track/9\n".repeat(crate::queue::MAX_ENTRIES + 1)).is_err()
+        );
     }
 
     #[test]
