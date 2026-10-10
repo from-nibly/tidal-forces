@@ -53,7 +53,9 @@ impl App {
     }
 
     fn start_page(&mut self, start: PageStart) {
-        let continuation = if self.more {
+        self.sync_track_view();
+        let view = self.track_view.active();
+        let continuation = if self.more && !view {
             match &self.page {
                 Page::Collection { kind, id, .. } if kind == "playlists" => self
                     .playlist_page
@@ -90,14 +92,34 @@ impl App {
                 .map_or("Artist tracks".into(), |artist| artist.name.clone()),
             _ => "Selected tracks".into(),
         };
+        let (tracks, title) = if view {
+            (
+                self.track_view
+                    .rows
+                    .iter()
+                    .map(|&i| self.tracks[i].clone())
+                    .collect(),
+                format!("{title} · loaded view"),
+            )
+        } else {
+            (self.tracks.clone(), title)
+        };
         let result = match start {
             PageStart::Track(index) => {
-                self.queue
-                    .start(self.tracks.clone(), index, title, continuation)
+                let index = if view {
+                    self.track_view.rows.iter().position(|&i| i == index)
+                } else {
+                    Some(index)
+                };
+                if let Some(index) = index {
+                    self.queue.start(tracks, index, title, continuation)
+                } else {
+                    Err(anyhow::anyhow!("That song is not in the current view"))
+                }
             }
             PageStart::Collection { shuffle } => {
                 self.queue
-                    .start_collection(self.tracks.clone(), title, continuation, shuffle)
+                    .start_collection(tracks, title, continuation, shuffle)
             }
         };
         match result {
@@ -126,7 +148,7 @@ impl App {
             if self.queue.advance(false) {
                 self.play_current();
             } else if !self.tracks.is_empty() {
-                self.play_track(0);
+                self.play_collection(false);
             }
             return;
         }

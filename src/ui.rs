@@ -34,6 +34,7 @@ mod theme;
 #[cfg(test)]
 mod toolbar_tests;
 mod track_table;
+mod track_view;
 #[cfg(debug_assertions)]
 pub(crate) mod visual_fixture;
 use navigation::{Location, Navigation, Page};
@@ -91,6 +92,7 @@ pub struct App {
     focus_search: bool,
     tracks: Vec<Track>,
     track_selection: selection::Selection,
+    track_view: track_view::View,
     albums: Vec<Album>,
     artists: Vec<Artist>,
     mixes: Vec<Mix>,
@@ -207,6 +209,7 @@ impl App {
             focus_search: false,
             tracks: vec![],
             track_selection: selection::Selection::default(),
+            track_view: track_view::View::default(),
             albums: vec![],
             artists: vec![],
             mixes: vec![],
@@ -357,6 +360,7 @@ impl App {
         self.generation += 1;
         self.tracks.clear();
         self.track_selection.clear();
+        self.track_view = Default::default();
         self.albums.clear();
         self.artists.clear();
         self.more = false;
@@ -552,6 +556,7 @@ impl App {
                     }
                     if !append {
                         self.track_selection.clear();
+                        self.track_view.invalidate();
                     }
                     self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
                     self.more = page.more;
@@ -709,6 +714,7 @@ impl App {
                 } if generation == self.generation => {
                     if !append {
                         self.track_selection.clear();
+                        self.track_view.invalidate();
                         self.favorites.invalidate(kind);
                     }
                     for id in page
@@ -760,6 +766,7 @@ impl App {
                 }
                 Event::Search { generation, data } if generation == self.generation => {
                     self.track_selection.clear();
+                    self.track_view.invalidate();
                     self.tracks = data.tracks;
                     self.albums = data.albums;
                     self.artists = data.artists;
@@ -775,6 +782,7 @@ impl App {
                         self.tracks.extend(tracks);
                     } else {
                         self.track_selection.clear();
+                        self.track_view.invalidate();
                         self.tracks = tracks;
                     }
                     self.loading = false;
@@ -789,6 +797,7 @@ impl App {
                     self.daily = home.daily;
                     self.mixes = home.mixes;
                     self.track_selection.clear();
+                    self.track_view.invalidate();
                     self.tracks = home.tracks;
                     self.loading = false;
                     self.more = false;
@@ -803,6 +812,7 @@ impl App {
                 }
                 Event::Radio { generation, tracks } if generation == self.generation => {
                     self.track_selection.clear();
+                    self.track_view.invalidate();
                     self.tracks = tracks;
                     self.loading = false;
                     self.more = false;
@@ -1816,6 +1826,7 @@ impl App {
     }
 
     fn content(&mut self, ui: &mut egui::Ui) {
+        self.sync_track_view();
         let short = ui.ctx().content_rect().height() < 600.;
         self.credential_notice(ui);
         if let Some(error) = self.error.clone() {
@@ -1965,9 +1976,9 @@ impl App {
         if collection {
             ui.add_space(12.);
             ui.horizontal(|ui| {
-                ui.add_enabled_ui(self.audio_available && !self.loading && !self.tracks.is_empty(), |ui| {
-                    if surfaces::action_button(ui,Icon::Play,"Play",true).on_hover_text("Play this collection in source order · Manual Up next is preserved").clicked() { self.play_collection(false); }
-                    if surfaces::action_button(ui,Icon::Shuffle,"Shuffle",false).on_hover_text("Start with a random loaded track; remaining source pages join the shuffle as they load. Manual Up next stays ordered.").clicked() { self.play_collection(true); }
+                ui.add_enabled_ui(self.audio_available && !self.loading && !self.track_view.rows.is_empty(), |ui| {
+                    if surfaces::action_button(ui,Icon::Play,if self.track_view.active() {"Play shown"} else {"Play"},true).on_hover_text("Play the current view · Filtering/sorting uses loaded songs only · Manual Up next is preserved").clicked() { self.play_collection(false); }
+                    if surfaces::action_button(ui,Icon::Shuffle,if self.track_view.active() {"Shuffle shown"} else {"Shuffle"},false).on_hover_text("Shuffle the current view · Filtering/sorting uses loaded songs only · Manual Up next stays ordered.").clicked() { self.play_collection(true); }
                 });
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
                 if let Some(page) = &self.playlist_page {

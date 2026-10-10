@@ -46,6 +46,14 @@ fn visible_rows(
 }
 
 impl App {
+    pub(super) fn sync_track_view(&mut self) {
+        if self
+            .track_view
+            .sync(self.account, self.generation, &self.tracks)
+        {
+            self.track_selection.retain_visible(&self.track_view.rows);
+        }
+    }
     fn apply_selection_action(&mut self, ctx: &egui::Context, action: SelectionAction) {
         if matches!(action, SelectionAction::Clear) {
             self.track_selection.clear();
@@ -54,15 +62,17 @@ impl App {
         if self.loading || self.track_selection.rows.is_empty() {
             return;
         }
+        self.sync_track_view();
         let result: anyhow::Result<()> = (|| {
             anyhow::ensure!(
                 self.track_selection.rows.len() <= crate::queue::MAX_ENTRIES,
                 "Selection actions are limited to 50,000 tracks; select fewer tracks."
             );
             let tracks: Vec<_> = self
-                .track_selection
+                .track_view
                 .rows
                 .iter()
+                .filter(|index| self.track_selection.rows.contains(index))
                 .map(|index| {
                     self.tracks
                         .get(*index)
@@ -73,6 +83,10 @@ impl App {
                         })
                 })
                 .collect::<anyhow::Result<_>>()?;
+            anyhow::ensure!(
+                tracks.len() == self.track_selection.rows.len(),
+                "Selection changed; select the tracks again."
+            );
             if matches!(action, SelectionAction::Copy) {
                 ctx.copy_text(
                     tracks
@@ -111,10 +125,63 @@ impl App {
         if self.tracks.is_empty() {
             return;
         }
+        self.sync_track_view();
+        ui.horizontal_wrapped(|ui| {
+            let filter = ui.add_enabled(
+                !self.loading,
+                egui::TextEdit::singleline(&mut self.track_view.query)
+                    .id(egui::Id::new("track-filter"))
+                    .hint_text("Filter loaded songs")
+                    .desired_width(190.)
+                    .min_size(vec2(190., 28.))
+                    .margin(vec2(6., 5.))
+                    .char_limit(256),
+            );
+            if filter.has_focus() {
+                self.track_selection.pending_focus = None;
+                if ui.ctx().content_rect().width() < 1180. {
+                    self.queue_open = false;
+                }
+            }
+            ui.add_enabled_ui(!self.loading, |ui| {
+                egui::ComboBox::from_id_salt("track-sort")
+                    .selected_text(self.track_view.sort.label())
+                    .show_ui(ui, |ui| {
+                        for sort in [
+                            track_view::Sort::Original,
+                            track_view::Sort::Title,
+                            track_view::Sort::Artist,
+                            track_view::Sort::Album,
+                            track_view::Sort::Duration,
+                        ] {
+                            ui.selectable_value(&mut self.track_view.sort, sort, sort.label());
+                        }
+                    });
+                ui.checkbox(&mut self.track_view.reverse, "Reverse");
+                if self.track_view.active() && ui.button("Reset view").clicked() {
+                    self.track_view.query.clear();
+                    self.track_view.sort = track_view::Sort::Original;
+                    self.track_view.reverse = false;
+                }
+            });
+        });
+        self.sync_track_view();
+        if self.track_view.active() {
+            ui.label(
+                RichText::new(format!(
+                    "{} of {} loaded songs shown · Playback uses this view only",
+                    self.track_view.rows.len(),
+                    self.tracks.len()
+                ))
+                .size(12.)
+                .color(MUTED),
+            );
+        }
+        let rows = &self.track_view.rows;
         let mut selection_action = None;
         ui.horizontal_wrapped(|ui| {
             ui.add_sized(vec2(100.,28.),egui::Label::new(RichText::new(format!("{} selected",self.track_selection.rows.len())).size(12.).color(MUTED)))
-                .on_hover_text("Selection refers to loaded track occurrences, including duplicates. Ctrl/Shift-click to select; Ctrl+A selects loaded tracks; Ctrl+C copies links when the table has focus.");
+                .on_hover_text("Selection refers to loaded track occurrences, including duplicates. Ctrl/Shift-click to select; Ctrl+A selects shown tracks; Ctrl+C copies links in view order when the table has focus.");
             ui.add_enabled_ui(!self.loading && !self.track_selection.rows.is_empty(),|ui| {
                 if ui.button("Copy links").clicked() { selection_action=Some(SelectionAction::Copy); }
                 ui.menu_button("Selection actions",|ui| {
@@ -124,6 +191,10 @@ impl App {
                 });
             });
         });
+        if rows.is_empty() {
+            ui.label("No matching songs in the loaded tracks.");
+            return;
+        }
         let mut play = None;
         let mut add = None;
         let mut radio = None;
@@ -147,7 +218,7 @@ impl App {
             0.
         };
         let (header, _) = ui.allocate_exact_size(vec2(width, 28.), egui::Sense::hover());
-        let mut all = self.track_selection.rows.len() == self.tracks.len();
+        let mut all = self.track_selection.rows.len() == rows.len();
         let mut selector = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("select-loaded")
@@ -164,26 +235,26 @@ impl App {
                 egui::WidgetInfo::labeled(
                     egui::WidgetType::Checkbox,
                     !self.loading,
-                    "Select all loaded tracks (partially selected)",
+                    "Select all shown tracks (partially selected)",
                 )
             } else {
                 egui::WidgetInfo::selected(
                     egui::WidgetType::Checkbox,
                     !self.loading,
                     all,
-                    "Select all loaded tracks",
+                    "Select all shown tracks",
                 )
             }
         });
         if check_all.changed() {
             if all {
-                self.track_selection.all();
+                self.track_selection.all_visible(rows);
             } else {
                 self.track_selection.clear();
             }
         }
         let mut table_focused = check_all.has_focus();
-        check_all.on_hover_text("Select all loaded tracks (not unloaded pages)");
+        check_all.on_hover_text("Select all shown tracks (not hidden tracks or unloaded pages)");
         for (x, label) in [
             (header.left() + 42., "#"),
             (header.left() + title_offset, "TITLE"),
@@ -220,15 +291,16 @@ impl App {
             header.bottom(),
             Stroke::new(1.0_f32, BORDER),
         );
-        let (id, bounds) = ui.allocate_space(vec2(width, height * self.tracks.len() as f32));
-        for i in visible_rows(bounds, ui.clip_rect(), height, self.tracks.len()) {
+        let (id, bounds) = ui.allocate_space(vec2(width, height * rows.len() as f32));
+        for position in visible_rows(bounds, ui.clip_rect(), height, rows.len()) {
+            let i = rows[position];
             let t = &self.tracks[i];
             let playing = self
                 .queue
                 .current()
                 .is_some_and(|current| current.id == t.id);
             let rect = egui::Rect::from_min_size(
-                bounds.min + vec2(0., height * i as f32),
+                bounds.min + vec2(0., height * position as f32),
                 vec2(width, height),
             );
             let response = ui.interact(rect, id.with(i), egui::Sense::click());
@@ -236,10 +308,11 @@ impl App {
                 response.request_focus();
                 if !self.loading {
                     let modifiers = ui.input(|input| input.modifiers);
-                    self.track_selection.select(
+                    self.track_selection.select_visible(
                         i,
                         modifiers.command || modifiers.ctrl,
                         modifiers.shift,
+                        rows,
                     );
                 }
             }
@@ -281,10 +354,11 @@ impl App {
             });
             if check.changed() {
                 let modifiers = ui.input(|input| input.modifiers);
-                self.track_selection.select(
+                self.track_selection.select_visible(
                     i,
                     !modifiers.shift || modifiers.command || modifiers.ctrl,
                     modifiers.shift,
+                    rows,
                 );
             }
             table_focused |= response.has_focus() || check.has_focus();
@@ -342,10 +416,11 @@ impl App {
             if cover.clicked() && !response.clicked() && !self.loading {
                 response.request_focus();
                 let modifiers = ui.input(|input| input.modifiers);
-                self.track_selection.select(
+                self.track_selection.select_visible(
                     i,
                     modifiers.command || modifiers.ctrl,
                     modifiers.shift,
+                    rows,
                 );
             }
             table_focused |= cover.has_focus();
@@ -444,14 +519,14 @@ impl App {
             }
             cover.context_menu(&mut menu);
             response.context_menu(menu);
-            response.on_hover_text("Click to select · Ctrl/Shift-click for multiple tracks · Shift+Up/Down selects a range · Ctrl+A selects loaded tracks · Ctrl+C copies links · Double-click or Enter to play");
+            response.on_hover_text("Click to select · Ctrl/Shift-click for multiple tracks · Shift+Up/Down selects a range · Ctrl+A selects shown tracks · Ctrl+C copies links in view order · Double-click or Enter to play");
         }
         if table_focused && !self.loading {
             if ui.input_mut(|input| {
                 input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
                     || input.consume_key(egui::Modifiers::CTRL, egui::Key::A)
             }) {
-                self.track_selection.all();
+                self.track_selection.all_visible(rows);
             }
             if ui.input(|input| {
                 input
@@ -479,29 +554,33 @@ impl App {
                 .map(|key| (key, input.modifiers))
             });
             if let Some((key, modifiers)) = navigation {
-                let current = self.track_selection.focus.unwrap_or(0);
-                let target = match key {
-                    egui::Key::ArrowUp => current.saturating_sub(1),
-                    egui::Key::ArrowDown => self
-                        .track_selection
-                        .focus
-                        .map_or(0, |current| (current + 1).min(self.tracks.len() - 1)),
-                    egui::Key::End => self.tracks.len() - 1,
+                let current = self
+                    .track_selection
+                    .focus
+                    .and_then(|i| rows.iter().position(|&row| row == i));
+                let position = match key {
+                    egui::Key::ArrowUp => current.unwrap_or(0).saturating_sub(1),
+                    egui::Key::ArrowDown => {
+                        current.map_or(0, |current| (current + 1).min(rows.len() - 1))
+                    }
+                    egui::Key::End => rows.len() - 1,
                     _ => 0,
                 };
+                let target = rows[position];
                 if (modifiers.command || modifiers.ctrl) && !modifiers.shift {
                     self.track_selection.focus = Some(target);
                 } else {
-                    self.track_selection.select(
+                    self.track_selection.select_visible(
                         target,
                         modifiers.command || modifiers.ctrl,
                         modifiers.shift,
+                        rows,
                     );
                 }
                 self.track_selection.pending_focus = Some(target);
                 ui.scroll_to_rect(
                     egui::Rect::from_min_size(
-                        bounds.min + vec2(0., height * target as f32),
+                        bounds.min + vec2(0., height * position as f32),
                         vec2(width, height),
                     ),
                     Some(egui::Align::Center),

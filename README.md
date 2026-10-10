@@ -203,6 +203,19 @@ or unversioned destinations are not eligible.
 Confirmation performs a real account edit. Automated validation uses isolated
 protocol fixtures, not live account mutations.
 
+## Loaded-song views (v0.11.0)
+
+Filter loaded songs by title, artist or album; sort by title, artist, album,
+duration or original order, with an optional reverse direction. This view covers
+**loaded songs only**. Load more pages to expand it.
+
+While filtering/sorting, **Play shown**, **Shuffle shown**, and row playback use
+only the displayed order, without fetching unfiltered songs into that queue.
+Selection ranges and select-all cover shown rows, and copied links/bulk queue
+additions follow view order. Duplicate occurrences and playlist removal positions
+stay distinct. **Reset view** restores normal collection playback and pagination.
+Changing the view never rewrites your playlist or changes the currently playing queue.
+
 ## Queue and paused restore
 
 Successful startup restoration is silent; actionable errors remain visible.

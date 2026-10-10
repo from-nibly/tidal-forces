@@ -47,6 +47,36 @@ impl Selection {
         }
         self.focus = Some(row);
     }
+    pub fn select_visible(&mut self, row: usize, toggle: bool, range: bool, visible: &[usize]) {
+        if !range {
+            self.select(row, toggle, false);
+            return;
+        }
+        let Some(end) = visible.iter().position(|&i| i == row) else {
+            return;
+        };
+        let start = self
+            .anchor
+            .and_then(|anchor| visible.iter().position(|&i| i == anchor))
+            .unwrap_or(end);
+        if !toggle {
+            self.rows.clear();
+        }
+        self.rows.extend(&visible[start.min(end)..=start.max(end)]);
+        self.anchor = Some(visible[start]);
+        self.focus = Some(row);
+    }
+    pub fn retain_visible(&mut self, visible: &[usize]) {
+        let visible: BTreeSet<_> = visible.iter().copied().collect();
+        self.rows.retain(|i| visible.contains(i));
+        self.focus = self.focus.filter(|i| visible.contains(i));
+        self.anchor = self.anchor.filter(|i| visible.contains(i));
+        self.pending_focus = None;
+    }
+    pub fn all_visible(&mut self, visible: &[usize]) {
+        self.rows = visible.iter().copied().collect();
+    }
+    #[cfg(test)]
     pub fn all(&mut self) {
         self.rows = (0..self.loaded).collect();
     }
@@ -55,6 +85,19 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_ranges_never_select_hidden_source_occurrences() {
+        let mut s = Selection::default();
+        s.sync(Some(7), 1, 5);
+        s.select_visible(4, false, false, &[4, 1]);
+        s.select_visible(1, false, true, &[4, 1]);
+        assert_eq!(s.rows.iter().copied().collect::<Vec<_>>(), [1, 4]);
+        s.all_visible(&[3, 1]);
+        assert_eq!(s.rows.iter().copied().collect::<Vec<_>>(), [1, 3]);
+        s.retain_visible(&[3]);
+        assert_eq!(s.rows.iter().copied().collect::<Vec<_>>(), [3]);
+        assert!(s.focus.is_none());
+    }
     #[test]
     fn ranges_toggles_and_append_preserve_source_occurrences() {
         let mut s = Selection::default();

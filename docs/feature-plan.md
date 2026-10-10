@@ -1,7 +1,7 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.10.0 playlist paste approved for publication and installation.**
-Published baseline: v0.9.0 (`782b0cea0d4e`).
+**Status: v0.11.0 approved for publication; installation deferred during Home Manager migration.**
+Published baseline: v0.10.0 (`11620b26178a`).
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -16,6 +16,35 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3c slice
+
+Filtering and sorting operate on **loaded songs only**, not silently on a partial
+collection presented as complete. The filter matches title/artist/album; sorting
+supports original order, title, artist, album and numeric duration, plus reverse.
+The UI shows the loaded scope and changes collection actions to Play shown / Shuffle
+shown. Playback freezes the projected order without unfiltered continuation pages;
+Reset view restores normal source playback and continuation. Manual Up next stays
+intact. Complete-collection fetching for these tools remains future work.
+
+A cached projection maps displayed rows to original loaded occurrence positions.
+Selection ranges/select-all operate on shown rows; copy/bulk queue actions use view
+order. Filtering removes hidden selections; sorting retains occurrence identity.
+Playlist removal still uses the original raw index and revision. Projection keys
+are invalidated on append/replacement and reset across navigation/account changes.
+Rendering stays viewport-bounded; keyboard focus and filter text editing remain
+separate. No new dependencies or persistent browse caches are introduced.
+
+Validation: 167 normal tests, strict Clippy/fmt, isolated D-Bus contracts,
+release-mode check and isolated native smoke pass. Tests cover stable duplicate
+ties, cache invalidation, visible-only ranges, copy/play order, no unfiltered
+continuation, manual-queue preservation, text-edit focus and raw-index removal.
+Synthetic layouts were captured at normal/minimum/high-zoom sizes.
+
+The user approved this slice after native review. Its Home Manager installation
+is skipped while that checkout is held for migration, per explicit user direction;
+the next approved version can be installed after handoff. Broader P3 caches,
+account tools and complete-context filtering remain unfinished.
 
 ## Approved P3b slice
 

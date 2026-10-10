@@ -214,60 +214,167 @@ fn table_keyboard_ranges_and_clipboard_do_not_steal_text_edit_shortcuts() {
 
 #[test]
 fn selection_does_not_change_raw_playlist_removal_identity_or_revision() {
-    let (ctx, mut app, _events, mut requests) = fixture();
-    app.tracks = tracks();
-    app.playlist_page = Some(PlaylistPage {
-        playlist: Playlist {
-            uuid: "fixture-list".into(),
-            title: "Fixture".into(),
-            ..Default::default()
-        },
-        etag: "revision-1".into(),
-        editable: true,
-        rows: [100, 102, 104, 107]
-            .into_iter()
-            .zip(app.tracks.iter().cloned())
-            .collect(),
-        next_offset: 108,
-        more: true,
-    });
-    draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
-    app.track_selection.select(0, false, false);
-    let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
-    let pos = point(&output, "Occurrence 1");
-    for pressed in [true, false] {
-        draw(
+    for transformed in [false, true] {
+        let (ctx, mut app, _events, mut requests) = fixture();
+        app.tracks = tracks();
+        app.playlist_page = Some(PlaylistPage {
+            playlist: Playlist {
+                uuid: "fixture-list".into(),
+                title: "Fixture".into(),
+                ..Default::default()
+            },
+            etag: "revision-1".into(),
+            editable: true,
+            rows: [100, 102, 104, 107]
+                .into_iter()
+                .zip(app.tracks.iter().cloned())
+                .collect(),
+            next_offset: 108,
+            more: true,
+        });
+        if transformed {
+            app.track_view.query = "occurrence 1".into();
+            app.track_view.sort = track_view::Sort::Title;
+            app.track_view.reverse = true;
+        }
+        draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+        app.track_selection.select(0, false, false);
+        let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+        let pos = point(&output, "Occurrence 1");
+        for pressed in [true, false] {
+            draw(
+                &ctx,
+                &mut app,
+                egui::Modifiers::NONE,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                false,
+            );
+        }
+        let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+        click(
             &ctx,
             &mut app,
+            point(&output, "Remove from this playlist…"),
             egui::Modifiers::NONE,
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Secondary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-            false,
+        );
+        let removal = app.removal.as_ref().unwrap();
+        assert_eq!(removal.index, 102);
+        assert_eq!(removal.track.id, 1);
+        assert_eq!(removal.etag, "revision-1");
+        assert_eq!(removal.playlist, "fixture-list");
+        assert!(
+            requests.try_recv().is_err(),
+            "Removal must still wait for confirmation"
         );
     }
+}
+
+#[test]
+fn filter_field_keeps_its_keyboard_and_clipboard_focus() {
+    let (ctx, mut app, _events, mut requests) = fixture();
+    app.tracks = tracks();
+    draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    app.track_selection.select(1, false, false);
+    app.track_selection.pending_focus = Some(1);
+    app.queue_open = true;
+    ctx.memory_mut(|m| m.request_focus(egui::Id::new("track-filter")));
+    draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    assert_eq!(
+        ctx.memory(|m| m.focused()),
+        Some(egui::Id::new("track-filter"))
+    );
+    assert!(!app.queue_open);
+    draw(
+        &ctx,
+        &mut app,
+        egui::Modifiers::CTRL,
+        vec![key(egui::Key::A, egui::Modifiers::CTRL)],
+        false,
+    );
+    assert_eq!(rows(&app), [1]);
+    draw(
+        &ctx,
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![egui::Event::Paste("occurrence 1".into())],
+        false,
+    );
+    assert_eq!(app.track_view.query, "occurrence 1");
+    assert_eq!(app.track_view.rows, [1]);
+    assert!(requests.try_recv().is_err());
+}
+#[test]
+fn sorted_keyboard_ranges_copy_and_play_in_visible_order_without_unloaded_tracks() {
+    let (ctx, mut app, _events, mut requests) = fixture();
+    app.tracks = tracks();
+    app.more = true;
+    app.page = Page::Collection {
+        kind: "albums".into(),
+        id: "1".into(),
+        title: "Fixture".into(),
+    };
+    app.track_view.reverse = true;
+    draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
     let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
     click(
         &ctx,
         &mut app,
-        point(&output, "Remove from this playlist…"),
+        point(&output, "Occurrence 3"),
         egui::Modifiers::NONE,
     );
-    let removal = app.removal.as_ref().unwrap();
-    assert_eq!(removal.index, 102);
-    assert_eq!(removal.track.id, 1);
-    assert_eq!(removal.etag, "revision-1");
-    assert_eq!(removal.playlist, "fixture-list");
-    assert!(
-        requests.try_recv().is_err(),
-        "Removal must still wait for confirmation"
+    draw(
+        &ctx,
+        &mut app,
+        egui::Modifiers::SHIFT,
+        vec![key(egui::Key::ArrowDown, egui::Modifiers::SHIFT)],
+        false,
     );
+    assert_eq!(rows(&app), [2, 3]);
+    let output = draw(
+        &ctx,
+        &mut app,
+        egui::Modifiers::CTRL,
+        vec![egui::Event::Copy],
+        false,
+    );
+    assert_eq!(
+        copied(&output),
+        ["https://tidal.com/browse/track/3\nhttps://tidal.com/browse/track/2"]
+    );
+    assert!(requests.try_recv().is_err());
+    app.queue.add(track(9), false).unwrap();
+    app.play_collection(false);
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Request::Play { id: 3, .. })
+    ));
+    assert_eq!(app.queue.export_ids().unwrap(), [3, 9, 2, 1, 1]);
+    assert!(app.queue.continuation().is_none());
+    assert!(app.queue.title().contains("loaded view"));
+    app.track_view.query = "Occurrence 1".into();
+    app.sync_track_view();
+    assert!(app.track_selection.rows.is_empty());
+    app.play_track(1);
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Request::Play { id: 1, .. })
+    ));
+    assert_eq!(app.queue.export_ids().unwrap(), [1, 9]);
+    app.track_view.query.clear();
+    app.track_view.reverse = false;
+    app.play_collection(false);
+    assert!(matches!(
+        app.queue.continuation(),
+        Some(Continuation::Album { offset: 4, .. })
+    ));
 }
 
 #[test]
