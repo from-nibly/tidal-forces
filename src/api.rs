@@ -353,6 +353,28 @@ impl Api {
         parse_library_page(value, kind, offset)
     }
 
+    pub async fn favorite_membership_page(
+        &mut self,
+        user: u64,
+        kind: FavoriteKind,
+        offset: usize,
+    ) -> Result<LibraryPage> {
+        anyhow::ensure!(
+            user != 0 && self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "Account changed; saved-status check stopped"
+        );
+        anyhow::ensure!(
+            offset < crate::queue::MAX_ENTRIES,
+            "Saved-status check reached its size limit"
+        );
+        let page = self.library(kind, offset).await?;
+        anyhow::ensure!(
+            self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "Account changed; saved-status check stopped"
+        );
+        Ok(page)
+    }
+
     pub async fn set_favorite(&mut self, user: u64, item: Favorite, saved: bool) -> Result<()> {
         anyhow::ensure!(item.id != 0, "This item has no valid TIDAL ID");
         anyhow::ensure!(
@@ -1387,6 +1409,42 @@ mod tests {
             api.credentials.load().await.unwrap().unwrap().access_token,
             "synthetic-new"
         );
+    }
+
+    #[tokio::test]
+    async fn membership_reads_guard_account_and_bounds_before_requesting() {
+        use super::playlist_tests::{mock, step};
+        let (mut api, server) = mock(vec![step(
+            "GET",
+            "/v1/users/7/favorites/tracks",
+            json!({"totalNumberOfItems":1,"items":[{"item":{"id":1,"title":"Synthetic"}}]}),
+        )]);
+        api.client = Client::builder()
+            .no_proxy()
+            .resolve_to_addrs("auth.tidal.com", &[])
+            .build()
+            .unwrap();
+        assert!(
+            api.favorite_membership_page(8, FavoriteKind::Tracks, 0)
+                .await
+                .is_err()
+        );
+        assert!(
+            api.favorite_membership_page(0, FavoriteKind::Tracks, 0)
+                .await
+                .is_err()
+        );
+        assert!(
+            api.favorite_membership_page(7, FavoriteKind::Tracks, crate::queue::MAX_ENTRIES)
+                .await
+                .is_err()
+        );
+        let page = api
+            .favorite_membership_page(7, FavoriteKind::Tracks, 0)
+            .await
+            .unwrap();
+        assert_eq!(page.data.tracks[0].id, 1);
+        server.join().unwrap();
     }
 
     #[tokio::test]

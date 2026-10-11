@@ -1,8 +1,8 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.11.0 published; installation skipped during Home Manager migration.**
-Published baseline: v0.11.0 (`b93f888e9990`). Last installed here: v0.10.0.
-Approved: v0.12.0 complete playlist loading; publication/deployment in progress.
+**Status: v0.12.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.12.0 (`98fe7d054b8d`); managed pin `2da7e34`.
+Approved: v0.13.0 favorite membership prefetch; publication/deployment in progress.
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -17,6 +17,36 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3e slice (v0.13.0)
+
+After sign-in, read saved tracks, albums and artists one page at a time into an
+account-scoped, memory-only membership cache (up to 50,000 entries per kind).
+Foreground loading and playback buffering take priority. No favorite mutations,
+queue changes, audio downloads or persistent personal-data cache are introduced.
+
+Only complete reads with known stable counts, unique nonzero IDs, full raw-row
+coverage and consistent page boundaries establish absence. Unavailable entries,
+missing totals and overlapping pages do not discard identifiable saved items:
+positive observations can be published while unseen items remain unknown. A
+wholly repeated page stops that kind's read rather than causing further duplicate
+fetches; other categories continue. Partial results explain why absence remains
+unknown. Errors, limits and cancellation never establish absence;
+validation failures name the category and specific reason. Local favorite
+writes cancel an in-progress check; account/check serial guards reject late results.
+These are best-effort paginated reads, not atomic TIDAL revisions: changes made
+in another app require refresh. Unknown hearts retain explicit actions menus, and
+membership arriving mid-click cannot turn an intended menu click into a write.
+Manual library reads also avoid declaring completeness across holes, duplicate
+rows, unknown totals or count changes.
+
+Settings → Library & Privacy adds progress, Stop checking and Refresh saved status.
+Persistent caches, restored browse views, album/favorite full-content loading and
+remaining playlist power tools are still pending. Validation: 188 normal tests,
+strict Clippy/fmt, isolated D-Bus contracts, release-mode check and native smoke/
+layout fixtures pass. No live favorite mutations were tested. The user confirmed
+partial-status handling and filled hearts for known saved songs, then approved
+publication and installation. Preserve the running review preview during deployment.
 
 ## Approved P3d slice (v0.12.0)
 
@@ -45,7 +75,7 @@ track. The user also confirmed another song played after encountering code 4005.
 Validation: 176 normal tests pass (serial
 run under host load), along with strict Clippy/fmt, isolated D-Bus contracts,
 release-mode check and native smoke/layout checks. No live account operations were
-tested by the agent. Native review approved; publication and deployment follow.
+tested by the agent. Native review approved; published and installed successfully.
 Album/favorite auto-loading, persistent
 caches and remaining P3 tools are still pending.
 

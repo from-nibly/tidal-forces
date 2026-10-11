@@ -64,6 +64,10 @@ impl Favorites {
             .or_else(|| self.complete.contains(&item.kind).then_some(false))
     }
 
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub fn pending(&self, item: Favorite) -> bool {
         self.pending.contains(&item)
     }
@@ -90,6 +94,10 @@ impl Favorites {
 
     pub fn invalidate(&mut self, kind: FavoriteKind) {
         self.known.retain(|item, _| item.kind != kind);
+        self.complete.remove(&kind);
+    }
+
+    pub fn mark_incomplete(&mut self, kind: FavoriteKind) {
         self.complete.remove(&kind);
     }
 

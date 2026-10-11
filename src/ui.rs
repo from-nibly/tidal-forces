@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 mod credentials;
 mod export;
+mod favorite_cache;
 mod history;
 mod library;
 pub(crate) mod navigation;
@@ -76,8 +77,10 @@ pub struct App {
     export: export::Export,
     account: Option<u64>,
     favorites: Favorites,
+    favorite_cache: favorite_cache::Cache,
     library_offset: usize,
     library_total: Option<u64>,
+    library_read_valid: bool,
     country: String,
     login: Option<(String, String)>,
     signing_in: bool,
@@ -194,8 +197,10 @@ impl App {
             export: export::Export::default(),
             account: None,
             favorites: Favorites::default(),
+            favorite_cache: favorite_cache::Cache::default(),
             library_offset: 0,
             library_total: None,
+            library_read_valid: false,
             country: String::new(),
             login: None,
             signing_in: false,
@@ -370,6 +375,7 @@ impl App {
         self.more = false;
         self.library_offset = 0;
         self.library_total = None;
+        self.library_read_valid = false;
         self.loading = false;
         if self.connected {
             self.load_page(0);
@@ -470,6 +476,7 @@ impl App {
         self.connected = false;
         self.account = None;
         self.favorites = Favorites::default();
+        self.stop_favorite_cache("Signed out.");
         self.navigation = Navigation::default();
         self.query.clear();
         self.search_query.clear();
@@ -672,6 +679,7 @@ impl App {
                     self.account = account.as_ref().map(|(user, _)| *user);
                     self.country = account.map(|(_, country)| country).unwrap_or_default();
                     self.favorites = Favorites::default();
+                    self.start_favorite_cache();
                     self.navigation = Navigation::default();
                     self.query.clear();
                     self.search_query.clear();
@@ -728,21 +736,8 @@ impl App {
                     if !append {
                         self.track_selection.clear();
                         self.track_view.invalidate();
-                        self.favorites.invalidate(kind);
                     }
-                    for id in page
-                        .data
-                        .tracks
-                        .iter()
-                        .map(|t| t.id)
-                        .chain(page.data.albums.iter().map(|a| a.id))
-                        .chain(page.data.artists.iter().map(|a| a.id))
-                    {
-                        self.favorites.observe(Favorite::new(kind, id));
-                    }
-                    if !page.more {
-                        self.favorites.mark_complete(kind);
-                    }
+                    self.observe_library_membership(kind, &page, append);
                     self.library_total = page.total;
                     self.library_offset = page.next_offset;
                     self.more = page.more;
@@ -757,7 +752,15 @@ impl App {
                     }
                     self.loading = false;
                 }
+                Event::FavoriteMembership {
+                    user,
+                    serial,
+                    kind,
+                    offset,
+                    result,
+                } => self.favorite_cache_page(user, serial, kind, offset, result),
                 Event::Favorite { user, item, result } if self.account == Some(user) => {
+                    self.stop_favorite_cache("Saved-status check stopped after a favorites change. Refresh to check the remaining items.");
                     self.favorites.finish(item, result.as_ref().ok().copied());
                     match result {
                         Ok(saved) => {
@@ -2472,6 +2475,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.viewport().close_requested()) {
             self.cancel_export(false);
             self.playlist_load = None;
+            self.stop_favorite_cache("Saved-status check stopped.");
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             if self.page != Page::Search {
@@ -2522,6 +2526,7 @@ impl eframe::App for App {
         self.prefetch_context();
         self.export_tick();
         self.playlist_load_tick();
+        self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
         self.checkpoint_history(false);
         self.checkpoint(false);

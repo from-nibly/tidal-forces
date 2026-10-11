@@ -32,6 +32,12 @@ pub enum Request {
         kind: FavoriteKind,
         offset: usize,
     },
+    FavoriteMembership {
+        user: u64,
+        serial: u64,
+        kind: FavoriteKind,
+        offset: usize,
+    },
     SetFavorite {
         user: u64,
         item: Favorite,
@@ -176,6 +182,13 @@ pub enum Event {
         kind: FavoriteKind,
         page: LibraryPage,
         append: bool,
+    },
+    FavoriteMembership {
+        user: u64,
+        serial: u64,
+        kind: FavoriteKind,
+        offset: usize,
+        result: Result<LibraryPage, String>,
     },
     Favorite {
         user: u64,
@@ -367,6 +380,10 @@ impl Backend {
                                     Request::Library { generation, kind, offset } => {
                                         let page = api.library(kind, offset).await?;
                                         events.send(Event::Library { generation, kind, page, append: offset > 0 });
+                                    }
+                                    Request::FavoriteMembership { user, serial, kind, offset } => {
+                                        let result = api.favorite_membership_page(user, kind, offset).await.map_err(|e| e.to_string());
+                                        events.send(Event::FavoriteMembership { user, serial, kind, offset, result });
                                     }
                                     Request::SetFavorite { user, item, saved } => {
                                         let result = api.set_favorite(user, item, saved).await.map(|()| saved).map_err(|e| e.to_string());

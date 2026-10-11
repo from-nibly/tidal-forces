@@ -33,9 +33,11 @@ impl App {
         let Some(user) = self.account else {
             return;
         };
-        if self.favorites.begin(item) && !self.try_send(Request::SetFavorite { user, item, saved })
-        {
-            self.favorites.finish(item, None);
+        if self.favorites.begin(item) {
+            self.stop_favorite_cache("Saved-status check stopped after a favorites change. Refresh to check the remaining items.");
+            if !self.try_send(Request::SetFavorite { user, item, saved }) {
+                self.favorites.finish(item, None);
+            }
         }
     }
 }
@@ -69,16 +71,41 @@ pub(super) fn favorite_button(
                     MUTED,
                 );
             }
-            if let Some(saved) = state {
+            // A background membership read must not turn an in-progress menu
+            // click into an unrequested save/remove action.
+            let press_id = response.id.with("membership-on-press");
+            if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+                ui.data_mut(|data| data.insert_temp(press_id, state));
+            }
+            let action_state = if response.clicked() {
+                let pressed = ui.data_mut(|data| data.remove_temp::<Option<bool>>(press_id));
+                if ui.input(|i| i.pointer.primary_released()) {
+                    pressed.unwrap_or(state)
+                } else {
+                    state
+                }
+            } else {
+                if !ui.input(|i| i.pointer.primary_down()) {
+                    ui.data_mut(|data| data.remove::<Option<bool>>(press_id));
+                }
+                state
+            };
+            let menu_open =
+                egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+            if let Some(saved) = action_state.filter(|_| !menu_open) {
                 if response.clicked() {
                     *action = Some((item, !saved));
                 }
             } else {
                 egui::Popup::menu(&response).show(|ui| {
                     ui.label(
-                        RichText::new("Favorite status not loaded")
-                            .size(12.)
-                            .color(MUTED),
+                        RichText::new(if state.is_none() {
+                            "Favorite status not loaded"
+                        } else {
+                            "Favorite actions"
+                        })
+                        .size(12.)
+                        .color(MUTED),
                     );
                     if ui.button("Save to TIDAL favorites").clicked() {
                         *action = Some((item, true));

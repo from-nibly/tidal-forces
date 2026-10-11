@@ -216,6 +216,23 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Favorite status prefetch (v0.13.0)
+
+After sign-in, the app checks saved tracks, albums and artists in the background,
+one page at a time. Complete validated reads populate account-scoped heart status.
+Unavailable entries, overlapping pages or missing totals still allow identifiable
+saved items to be cached, without assuming that unseen items are not saved.
+A wholly repeated page stops that category's read rather than repeatedly fetching
+it; the other categories can still be checked. Failed reads never
+establish absence. Checks are bounded
+to 50,000 entries per kind and yield to foreground loading/playback buffering.
+
+Settings → **Library & Privacy** provides **Stop checking** and **Refresh saved
+status**. This cache is memory-only, not an offline library. Refresh after changes
+in another app: TIDAL's paginated favorite reads do not provide an atomic revision.
+Account changes and local favorite writes guard against stale results. These reads
+do not change your favorites or playback.
+
 ## Complete playlist loading (v0.12.0)
 
 **Load all playlist songs** reads the remaining pages of the open playlist so the

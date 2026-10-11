@@ -120,6 +120,8 @@ impl App {
                 ui.label(RichText::new("Google Cast and TIDAL Connect are separate integrations. Neither is enabled in this release.").color(MUTED));
             }
             SettingsSection::Privacy => {
+                self.favorite_cache_controls(ui);
+                ui.add_space(16.);
                 surfaces::section_title(ui, "Credentials");
                 self.credential_controls(ui);
                 ui.label("No passwords, telemetry or third-party music proxies. Favorite changes are sent only when you explicitly choose them.");

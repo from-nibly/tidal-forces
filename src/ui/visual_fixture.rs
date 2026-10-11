@@ -15,7 +15,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "albums",
             "artists",
             "history",
-            "settings"
+            "settings",
+            "privacy"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -253,6 +254,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             .observe(Favorite::new(FavoriteKind::Tracks, id));
     }
     app.page = match page {
+        "privacy" => {
+            app.settings_section = SettingsSection::Privacy;
+            Page::Settings
+        }
         "settings" => {
             app.settings_section = SettingsSection::Appearance;
             Page::Settings
