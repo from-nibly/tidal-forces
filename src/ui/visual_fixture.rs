@@ -16,7 +16,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "artists",
             "history",
             "settings",
-            "privacy"
+            "privacy",
+            "browse"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -233,7 +234,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             });
         app.folders.insert(id.into(), Vec::new());
     }
-    if matches!(page, "collection" | "selection" | "view" | "load") {
+    if matches!(
+        page,
+        "collection" | "selection" | "view" | "load" | "browse"
+    ) {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
                 uuid: "fixture-0".into(),
@@ -303,9 +307,13 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         playlist.more = true;
         playlist.playlist.number_of_tracks = 305;
     }
-    if page == "view" {
+    if matches!(page, "view" | "browse") {
         app.track_view.query = "Signal".into();
         app.track_view.sort = track_view::Sort::Title;
+    }
+    if page == "browse" {
+        app.browse_loaded();
+        app.browse_cache.restored = true;
     }
     if page == "selection" {
         app.track_selection

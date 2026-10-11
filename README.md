@@ -216,6 +216,20 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Restored browse views (v0.14.0)
+
+**Back / Forward** can restore recent loaded catalog, search and library views,
+including filter/sort options, occurrence-based selection and scroll position.
+This does not restart playback or replace the queue. A **Restored view** label
+identifies cached data; **Refresh** fetches the latest changes.
+
+The memory-only cache holds at most eight views and 50,000 table rows for the
+current account. Account changes and local favorite/playlist writes invalidate it.
+In-flight, failed, oversized or evicted views reload normally; Home, Settings and
+folder views retain their existing behavior. Fresh page/link navigation still
+fetches data. Cached playlist pagination and edits retain their original raw-index
+and revision guards. Favorite membership is not rolled back with browse data.
+
 ## Favorite status prefetch (v0.13.0)
 
 After sign-in, the app checks saved tracks, albums and artists in the background,

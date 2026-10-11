@@ -19,6 +19,16 @@ impl Selection {
         self.scope = Some((user, generation));
         self.loaded = loaded;
     }
+    /// Rebind only when restoring the same account's intact loaded snapshot.
+    pub fn restore_scope(&mut self, user: Option<u64>, generation: u64, loaded: usize) {
+        if self.scope.map(|scope| scope.0) != Some(user) || self.loaded != loaded {
+            self.clear();
+        }
+        self.scope = Some((user, generation));
+        self.loaded = loaded;
+        self.pending_focus = None;
+    }
+
     pub fn clear(&mut self) {
         self.rows.clear();
         self.anchor = None;

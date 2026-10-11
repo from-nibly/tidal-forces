@@ -495,6 +495,12 @@ fn history_and_refresh_do_not_restart_a_radio_or_track() {
     assert!(matches!(requests.try_recv(), Ok(Request::Home { .. })));
     app.history(false);
     assert_eq!(app.page, Page::Radio(radio));
+    assert!(app.browse_cache.restored);
+    assert_eq!(app.tracks[0].id, 1);
+    assert!(requests.try_recv().is_err());
+    app.autoplay_page = false;
+    app.generation += 1;
+    app.load_page(0);
     assert!(matches!(requests.try_recv(), Ok(Request::Radio { .. })));
     events
         .send(Event::Radio {

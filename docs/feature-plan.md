@@ -1,8 +1,8 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.12.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.12.0 (`98fe7d054b8d`); managed pin `2da7e34`.
-Approved: v0.13.0 favorite membership prefetch; publication/deployment in progress.
+**Status: v0.13.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.13.0 (`9ebf7f04142f`); managed pin `ff2f1ab`.
+Approved: v0.14.0 bounded browse-view restoration; publication/deployment in progress.
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -17,6 +17,30 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3f slice (v0.14.0)
+
+Back/Forward can restore recent loaded search, library and catalog views, including
+filter/sort options, source-occurrence selection and native scroll position. No
+playback is started and the queue is untouched. Restored data is identified in the
+toolbar; Refresh and fresh page/link navigation still fetch from TIDAL.
+
+Snapshots are memory-only, account-scoped and bounded to eight views / 50,000 table
+rows. In-flight, failed, oversized and evicted views fall back to normal loading;
+Home, Settings and folder pages retain existing behavior. Account changes clear
+snapshots and old-account navigation. Favorite/playlist writes invalidate snapshots
+before sending and on completion, including uncertain failures. Restoring a browse
+snapshot never overwrites newer favorite membership; appending to cached library
+rows cannot re-establish membership completeness from an old prefix. Playlist raw indices, revision
+and next offset are retained for guarded continuation/editing, not treated as fresh
+server authorization. Playback still authorizes media anew.
+
+Validation: 197 normal tests, strict Clippy/fmt, isolated D-Bus contracts, release
+check and native smoke/layout checks. Includes actual native scroll restoration,
+selection identity, no autoplay, radio refresh behavior, stale responses, memory
+bounds, account isolation and mutation invalidation. The user confirmed native
+browse-view restoration works and approved installation; publication and deployment
+follow the release policy.
 
 ## Approved P3e slice (v0.13.0)
 
@@ -46,7 +70,8 @@ remaining playlist power tools are still pending. Validation: 188 normal tests,
 strict Clippy/fmt, isolated D-Bus contracts, release-mode check and native smoke/
 layout fixtures pass. No live favorite mutations were tested. The user confirmed
 partial-status handling and filled hearts for known saved songs, then approved
-publication and installation. Preserve the running review preview during deployment.
+publication and installation; both completed successfully. Preserve the running
+review preview during subsequent development.
 
 ## Approved P3d slice (v0.12.0)
 

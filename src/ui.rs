@@ -14,6 +14,7 @@ use crate::{
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
+mod browse_cache;
 mod credentials;
 mod export;
 mod favorite_cache;
@@ -78,6 +79,7 @@ pub struct App {
     account: Option<u64>,
     favorites: Favorites,
     favorite_cache: favorite_cache::Cache,
+    browse_cache: browse_cache::Cache,
     library_offset: usize,
     library_total: Option<u64>,
     library_read_valid: bool,
@@ -198,6 +200,7 @@ impl App {
             account: None,
             favorites: Favorites::default(),
             favorite_cache: favorite_cache::Cache::default(),
+            browse_cache: browse_cache::Cache::default(),
             library_offset: 0,
             library_total: None,
             library_read_valid: false,
@@ -265,6 +268,17 @@ impl App {
     }
 
     fn try_send(&mut self, r: Request) -> bool {
+        if matches!(
+            &r,
+            Request::SetFavorite { .. }
+                | Request::CreatePlaylist { .. }
+                | Request::AddToPlaylist { .. }
+                | Request::RemoveFromPlaylist { .. }
+                | Request::CreateQueuePlaylist { .. }
+                | Request::AppendQueueBatch { .. }
+        ) {
+            self.invalidate_browse_cache();
+        }
         if let Err(error) = self.backend.tx.try_send(r) {
             match error.into_inner() {
                 Request::CreateQueuePlaylist { .. }
@@ -299,7 +313,10 @@ impl App {
                 | Request::Collection { .. }
                 | Request::Playlist { .. }
                 | Request::Track { .. }
-                | Request::Artist { .. } => self.loading = false,
+                | Request::Artist { .. } => {
+                    self.loading = false;
+                    self.browse_cache.ready = false;
+                }
                 Request::BeginPkce | Request::FinishPkce(_) | Request::Login => {
                     self.signing_in = false;
                     self.pkce_wait = false;
@@ -356,6 +373,8 @@ impl App {
     }
 
     fn show_location(&mut self, location: Location, autoplay: bool) {
+        self.save_browse_view();
+        let target = location.clone();
         self.page = location.page;
         self.autoplay_page = autoplay;
         if self.page == Page::Search {
@@ -377,6 +396,13 @@ impl App {
         self.library_total = None;
         self.library_read_valid = false;
         self.loading = false;
+        self.browse_cache.ready = false;
+        self.browse_cache.restored = false;
+        self.browse_cache.scroll = 0.;
+        self.browse_cache.pending_scroll = Some(0.);
+        if !autoplay && self.restore_browse_view(&target) {
+            return;
+        }
         if self.connected {
             self.load_page(0);
         }
@@ -400,6 +426,7 @@ impl App {
     fn load_page(&mut self, offset: usize) {
         if offset == 0 {
             self.playlist_load = None;
+            self.fresh_browse_read();
         }
         self.loading = true;
         match &self.page {
@@ -475,6 +502,7 @@ impl App {
         self.loading = false;
         self.connected = false;
         self.account = None;
+        self.invalidate_browse_cache();
         self.favorites = Favorites::default();
         self.stop_favorite_cache("Signed out.");
         self.navigation = Navigation::default();
@@ -495,7 +523,12 @@ impl App {
                     user,
                     operation,
                     result,
-                } => self.export_created(user, operation, result),
+                } => {
+                    if self.account == Some(user) {
+                        self.invalidate_browse_cache();
+                    }
+                    self.export_created(user, operation, result);
+                }
                 Event::PlaylistDuplicatesChecked {
                     user,
                     operation,
@@ -507,7 +540,12 @@ impl App {
                     operation,
                     offset,
                     result,
-                } => self.export_saved(user, operation, offset, result),
+                } => {
+                    if self.account == Some(user) {
+                        self.invalidate_browse_cache();
+                    }
+                    self.export_saved(user, operation, offset, result);
+                }
                 Event::Credentials {
                     status,
                     warning,
@@ -564,6 +602,7 @@ impl App {
                     append,
                 } if generation == self.generation => {
                     if !self.accept_playlist_load_page(generation, &page, append) {
+                        self.browse_cache.ready = false;
                         continue;
                     }
                     if append {
@@ -575,6 +614,7 @@ impl App {
                         page.rows = rows;
                     }
                     if !append {
+                        self.browse_cache.restored = false;
                         self.track_selection.clear();
                         self.track_view.invalidate();
                         self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
@@ -585,6 +625,7 @@ impl App {
                     }
                     self.playlist_page = Some(page);
                     self.loading = false;
+                    self.browse_loaded();
                 }
                 Event::CollectionTitle { generation, title } if generation == self.generation => {
                     if let Page::Collection { title: current, .. } = &mut self.page {
@@ -596,6 +637,7 @@ impl App {
                     self.playlist_busy = false;
                 }
                 Event::PlaylistCreated(playlist) => {
+                    self.invalidate_browse_cache();
                     self.new_playlist_title.clear();
                     self.new_playlist_description.clear();
                     self.notice = Some(format!("Created {}.", playlist.title));
@@ -617,6 +659,7 @@ impl App {
                     }
                 }
                 Event::PlaylistEdited { id, message } => {
+                    self.invalidate_browse_cache();
                     self.playlist_busy = false;
                     self.playlist_dialog = false;
                     self.playlist_target = None;
@@ -630,6 +673,7 @@ impl App {
                     }
                 }
                 Event::PlaylistError(message) => {
+                    self.invalidate_browse_cache();
                     self.playlist_busy = false;
                     self.playlist_error = Some(message.clone());
                     self.error = Some(message);
@@ -677,9 +721,13 @@ impl App {
                     self.pkce_wait = false;
                     self.connected = account.is_some();
                     self.account = account.as_ref().map(|(user, _)| *user);
+                    self.invalidate_browse_cache();
                     self.country = account.map(|(_, country)| country).unwrap_or_default();
                     self.favorites = Favorites::default();
                     self.start_favorite_cache();
+                    if account_changed {
+                        self.page = Page::Home;
+                    }
                     self.navigation = Navigation::default();
                     self.query.clear();
                     self.search_query.clear();
@@ -734,6 +782,7 @@ impl App {
                     append,
                 } if generation == self.generation => {
                     if !append {
+                        self.browse_cache.restored = false;
                         self.track_selection.clear();
                         self.track_view.invalidate();
                     }
@@ -751,6 +800,7 @@ impl App {
                         self.artists = page.data.artists;
                     }
                     self.loading = false;
+                    self.browse_loaded();
                 }
                 Event::FavoriteMembership {
                     user,
@@ -760,6 +810,7 @@ impl App {
                     result,
                 } => self.favorite_cache_page(user, serial, kind, offset, result),
                 Event::Favorite { user, item, result } if self.account == Some(user) => {
+                    self.invalidate_browse_cache();
                     self.stop_favorite_cache("Saved-status check stopped after a favorites change. Refresh to check the remaining items.");
                     self.favorites.finish(item, result.as_ref().ok().copied());
                     match result {
@@ -781,12 +832,14 @@ impl App {
                     }
                 }
                 Event::Search { generation, data } if generation == self.generation => {
+                    self.browse_cache.restored = false;
                     self.track_selection.clear();
                     self.track_view.invalidate();
                     self.tracks = data.tracks;
                     self.albums = data.albums;
                     self.artists = data.artists;
                     self.loading = false;
+                    self.browse_loaded();
                 }
                 Event::Tracks {
                     generation,
@@ -797,11 +850,13 @@ impl App {
                     if append {
                         self.tracks.extend(tracks);
                     } else {
+                        self.browse_cache.restored = false;
                         self.track_selection.clear();
                         self.track_view.invalidate();
                         self.tracks = tracks;
                     }
                     self.loading = false;
+                    self.browse_loaded();
                     if matches!(self.page, Page::Track(_))
                         && self.autoplay_page
                         && !self.tracks.is_empty()
@@ -827,11 +882,13 @@ impl App {
                     self.error = Some(message);
                 }
                 Event::Radio { generation, tracks } if generation == self.generation => {
+                    self.browse_cache.restored = false;
                     self.track_selection.clear();
                     self.track_view.invalidate();
                     self.tracks = tracks;
                     self.loading = false;
                     self.more = false;
+                    self.browse_loaded();
                     if self.autoplay_page {
                         self.play_track(0);
                     }
@@ -881,6 +938,7 @@ impl App {
                     message,
                 } if generation == self.generation => {
                     self.playlist_load = None;
+                    self.browse_cache.ready = false;
                     self.loading = false;
                     self.error = Some(message);
                 }
@@ -1720,7 +1778,7 @@ impl App {
                 let compact = ui.ctx().content_rect().width() <= 1050.;
                 let width = (if compact { 200.0_f32 } else { 210. }).min(ui.available_width());
                 let gap = (ui.available_width() - width).max(0.);
-                if !compact && gap >= 140. {
+                if (!compact || self.browse_cache.restored) && gap >= 140. {
                     let label = match &self.page {
                         Page::Home => "Home",
                         Page::Search => "Search",
@@ -1738,6 +1796,10 @@ impl App {
                         Page::Mix { .. } => "Mixes",
                         Page::Radio(_) => "Radio",
                     };
+                    let label = if self.browse_cache.restored {
+                        if compact { "Restored view · Refresh for latest".to_owned() }
+                        else { format!("{label} · Restored view") }
+                    } else { label.to_owned() };
                     let (rect, _) =
                         ui.allocate_exact_size(vec2(gap - 6., 32.), egui::Sense::hover());
                     let mut crumb = ui.new_child(
@@ -1746,11 +1808,14 @@ impl App {
                             .max_rect(rect)
                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
-                    crumb.add(
+                    let response = crumb.add(
                         egui::Label::new(RichText::new(label).size(11.).color(MUTED))
                             .truncate()
                             .selectable(false),
                     );
+                    if self.browse_cache.restored {
+                        response.on_hover_text("Restored loaded data for this account. Refresh for the latest changes.");
+                    }
                 } else {
                     ui.add_space(gap);
                 }
@@ -2513,11 +2578,23 @@ impl eframe::App for App {
             ))
             .show(ctx, |ui| {
                 self.toolbar(ui);
-                egui::ScrollArea::vertical()
-                    .id_salt(("content", &self.page, &self.search_query))
-                    .show(ui, |ui| {
-                        self.content(ui);
-                    });
+                let generation = self.generation;
+                let mut scroll = egui::ScrollArea::vertical().id_salt((
+                    "content",
+                    self.account,
+                    &self.page,
+                    &self.search_query,
+                ));
+                if let Some(offset) = self.browse_cache.pending_scroll.take() {
+                    scroll = scroll.vertical_scroll_offset(offset);
+                }
+                let output = scroll.show(ui, |ui| {
+                    self.content(ui);
+                });
+                // Navigation inside content has already restored the next view.
+                if generation == self.generation {
+                    self.browse_cache.scroll = output.state.offset.y;
+                }
             });
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
