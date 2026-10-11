@@ -100,6 +100,7 @@ impl App {
         let page = self.playlist_page.as_ref()?;
         if !self.connected
             || self.loading
+            || self.playlist_load.is_some()
             || self.playlist_busy
             || kind != "playlists"
             || *id != page.playlist.uuid

@@ -52,17 +52,22 @@ impl View {
         }
         let changed = self.dirty || self.source != Some(key);
         if changed {
-            self.keys = tracks
-                .iter()
-                .map(|t| {
-                    (
-                        t.title.to_lowercase(),
-                        t.artist.name.to_lowercase(),
-                        t.album.title.to_lowercase(),
-                        t.duration,
-                    )
-                })
-                .collect();
+            let append = !self.dirty
+                && self.source.is_some_and(|old| {
+                    (old.0, old.1) == (user, generation) && old.2 <= tracks.len()
+                });
+            if !append {
+                self.keys.clear();
+            }
+            let start = self.keys.len();
+            self.keys.extend(tracks[start..].iter().map(|t| {
+                (
+                    t.title.to_lowercase(),
+                    t.artist.name.to_lowercase(),
+                    t.album.title.to_lowercase(),
+                    t.duration,
+                )
+            }));
             self.source = Some(key);
             self.dirty = false;
         }

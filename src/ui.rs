@@ -20,6 +20,7 @@ mod history;
 mod library;
 pub(crate) mod navigation;
 mod playback;
+mod playlist_load;
 mod side_panel;
 use playback::RestoreGuard;
 mod settings;
@@ -93,6 +94,7 @@ pub struct App {
     tracks: Vec<Track>,
     track_selection: selection::Selection,
     track_view: track_view::View,
+    playlist_load: Option<playlist_load::PlaylistLoad>,
     albums: Vec<Album>,
     artists: Vec<Artist>,
     mixes: Vec<Mix>,
@@ -210,6 +212,7 @@ impl App {
             tracks: vec![],
             track_selection: selection::Selection::default(),
             track_view: track_view::View::default(),
+            playlist_load: None,
             albums: vec![],
             artists: vec![],
             mixes: vec![],
@@ -361,6 +364,7 @@ impl App {
         self.tracks.clear();
         self.track_selection.clear();
         self.track_view = Default::default();
+        self.playlist_load = None;
         self.albums.clear();
         self.artists.clear();
         self.more = false;
@@ -388,6 +392,9 @@ impl App {
     }
 
     fn load_page(&mut self, offset: usize) {
+        if offset == 0 {
+            self.playlist_load = None;
+        }
         self.loading = true;
         match &self.page {
             Page::Track(id) => self.send(Request::Track {
@@ -549,6 +556,12 @@ impl App {
                     mut page,
                     append,
                 } if generation == self.generation => {
+                    if !self.accept_playlist_load_page(generation, &page, append) {
+                        continue;
+                    }
+                    if append {
+                        self.tracks.extend(page.rows.iter().map(|(_, t)| t.clone()));
+                    }
                     if append && let Some(old) = self.playlist_page.take() {
                         let mut rows = old.rows;
                         rows.append(&mut page.rows);
@@ -557,8 +570,8 @@ impl App {
                     if !append {
                         self.track_selection.clear();
                         self.track_view.invalidate();
+                        self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
                     }
-                    self.tracks = page.rows.iter().map(|(_, t)| t.clone()).collect();
                     self.more = page.more;
                     if let Page::Collection { title, .. } = &mut self.page {
                         *title = page.playlist.title.clone();
@@ -864,6 +877,7 @@ impl App {
                     generation,
                     message,
                 } if generation == self.generation => {
+                    self.playlist_load = None;
                     self.loading = false;
                     self.error = Some(message);
                 }
@@ -2225,10 +2239,14 @@ impl App {
                 .color(MUTED),
             );
         }
+        self.playlist_load_controls(ui);
         self.track_list(ui);
         if self.more
             && ui
-                .add_enabled(!self.loading, egui::Button::new("Load more tracks"))
+                .add_enabled(
+                    !self.loading && self.playlist_load.is_none(),
+                    egui::Button::new("Load more tracks"),
+                )
                 .clicked()
         {
             let offset = if matches!(self.page, Page::Library(_)) {
@@ -2453,6 +2471,7 @@ impl eframe::App for App {
         self.credential_close_guard(ctx);
         if ctx.input(|input| input.viewport().close_requested()) {
             self.cancel_export(false);
+            self.playlist_load = None;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             if self.page != Page::Search {
@@ -2502,6 +2521,7 @@ impl eframe::App for App {
         self.handle_track_paste(ctx);
         self.prefetch_context();
         self.export_tick();
+        self.playlist_load_tick();
         self.queue_drag_cursor(ctx);
         self.checkpoint_history(false);
         self.checkpoint(false);

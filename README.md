@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Complete playlist loading (v0.12.0)
+
+**Load all playlist songs** reads the remaining pages of the open playlist so the
+filter and sort controls can cover all available songs. It works for owned and
+read-only playlists with a usable revision, up to 50,000 entries.
+
+**Stop loading** stops further pages; the current read may still finish. Changed
+or incomplete playlists stop with an error rather than mixing snapshots. Loaded
+songs stay visible, and nothing starts playing or changes your current queue.
+Other collection types still use their existing Load more controls.
+
 ## Queue and paused restore
 
 Successful startup restoration is silent; actionable errors remain visible.

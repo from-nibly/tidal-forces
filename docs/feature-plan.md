@@ -1,7 +1,8 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.11.0 approved for publication; installation deferred during Home Manager migration.**
-Published baseline: v0.10.0 (`11620b26178a`).
+**Status: v0.11.0 published; installation skipped during Home Manager migration.**
+Published baseline: v0.11.0 (`b93f888e9990`). Last installed here: v0.10.0.
+Approved: v0.12.0 complete playlist loading; publication/deployment in progress.
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
@@ -16,6 +17,37 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3d slice (v0.12.0)
+
+Load all playlist songs explicitly reads the remaining pages of a versioned
+playlist, including read-only playlists. The controller freezes account, navigation
+generation, playlist ID, revision and total raw entry count, then requests one page
+at a time. Append uses raw offsets, including skipped unavailable/video entries;
+identity/count/order/progress/end checks run before merging each response. It is
+bounded to 50,000 entries and yields between pages to other backend work.
+
+Stop loading prevents further reads; an in-flight page can finish. Errors,
+backpressure, account/navigation changes, fresh refreshes and window close stop the
+operation without automatic retry or autoplay. Previously loaded rows, selected
+occurrences, manual Up next and active playback remain intact. Track and normalized
+projection-key append now avoid recloning/re-normalizing all prior rows.
+
+Tests cover multi-page completion, sparse raw positions, unchanged playback and
+selection, pointer start/stop, revision/count/identity/offset failures, scope changes,
+limits and closed-channel backpressure. Playback error handling now distinguishes
+TIDAL's unavailable-asset response (HTTP 401 / code 4005) from session expiry;
+that response stops without reactive token renewal or retry. Other authorization
+failures retain bounded, redacted phase/code diagnostics. Synthetic tests cover
+unchanged credentials, no asset retry, and successful authorization of a subsequent
+track. The user also confirmed another song played after encountering code 4005.
+
+Validation: 176 normal tests pass (serial
+run under host load), along with strict Clippy/fmt, isolated D-Bus contracts,
+release-mode check and native smoke/layout checks. No live account operations were
+tested by the agent. Native review approved; publication and deployment follow.
+Album/favorite auto-loading, persistent
+caches and remaining P3 tools are still pending.
 
 ## Approved P3c slice
 
