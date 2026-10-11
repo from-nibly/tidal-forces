@@ -88,7 +88,7 @@ impl Api {
             ])
             .send()
             .await?;
-        Ok(check(r).await?.json().await?)
+        Ok(check_for(r, "device sign-in").await?.json().await?)
     }
 
     pub async fn poll_login(&mut self, code: &str) -> Result<LoginPoll> {
@@ -112,7 +112,7 @@ impl Api {
                 Some("slow_down") => Ok(LoginPoll::SlowDown),
                 Some("expired_token") => bail!("Sign-in expired. Please try again."),
                 Some("access_denied") => bail!("Sign-in was declined."),
-                _ => bail!("TIDAL sign-in failed (HTTP {status}). Please retry."),
+                _ => bail!(rejection_message(status, "device sign-in", &v)),
             };
         }
         let old = self.session.clone();
@@ -143,7 +143,7 @@ impl Api {
             ])
             .send()
             .await?;
-        let v = check(r).await?.json().await?;
+        let v = check_for(r, "lossless sign-in").await?.json().await?;
         let old = self.session.clone();
         if let Some(s) = self.session.as_mut() {
             s.pkce = true;
@@ -209,7 +209,7 @@ impl Api {
             ])
             .send()
             .await?;
-        let value = check(r).await?.json().await?;
+        let value = check_for(r, "session renewal").await?.json().await?;
         self.accept_token(value).await
     }
 
@@ -260,6 +260,13 @@ impl Api {
         {
             self.refresh().await?;
         }
+        let phase = if path == "sessions" {
+            "session validation"
+        } else if path.ends_with("/playbackinfopostpaywall") {
+            "playback authorization"
+        } else {
+            "API request"
+        };
         for attempt in 0..2 {
             let s = self.session.as_ref().context("Sign in to TIDAL first")?;
             let mut request = self
@@ -275,11 +282,19 @@ impl Api {
             if let Some(etag) = revision {
                 request = request.header("If-None-Match", etag);
             }
-            let r = request.send().await.map_err(|e| {
+            let mut r = request.send().await.map_err(|e| {
                 if method == Method::GET { anyhow::Error::from(e) }
                 else { anyhow::anyhow!("Could not confirm the change with TIDAL. It may have completed; refresh before retrying.") }
             })?;
-            if r.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
+            if r.status() == StatusCode::UNAUTHORIZED {
+                let value = rejection_value(&mut r).await;
+                // Asset readiness is not a token failure. Do not renew credentials
+                // or retry the same unavailable asset in response to this code.
+                if (phase == "playback authorization" && value["subStatus"].as_u64() == Some(4005))
+                    || attempt > 0
+                {
+                    bail!(rejection_message(StatusCode::UNAUTHORIZED, phase, &value));
+                }
                 self.refresh().await?;
                 continue;
             }
@@ -293,9 +308,9 @@ impl Api {
                     "Could not confirm the change with TIDAL. It may have completed; refresh before retrying."
                 );
             }
-            return check(r).await;
+            return check_for(r, phase).await;
         }
-        bail!("Session expired; sign in again")
+        bail!("TIDAL did not accept the refreshed sign-in")
     }
 
     pub async fn search(&mut self, query: &str) -> Result<Search> {
@@ -1199,13 +1214,71 @@ fn items<T: serde::de::DeserializeOwned>(v: &Value) -> Result<Vec<T>> {
         .collect()
 }
 
-async fn check(r: Response) -> Result<Response> {
+fn rejection_message(status: StatusCode, phase: &str, value: &Value) -> String {
+    if status == StatusCode::UNAUTHORIZED
+        && phase == "playback authorization"
+        && value["subStatus"].as_u64() == Some(4005)
+    {
+        return "TIDAL says this song is not ready for playback (code 4005). Try another song. If many songs fail, this app's playback access may be restricted.".into();
+    }
+    // Never echo server descriptions, URLs, tokens or unrecognized error strings.
+    let code = value["error"].as_str().filter(|code| {
+        matches!(
+            *code,
+            "invalid_client"
+                | "unauthorized_client"
+                | "invalid_grant"
+                | "invalid_scope"
+                | "access_denied"
+                | "invalid_request"
+                | "unsupported_grant_type"
+                | "invalid_token"
+                | "insufficient_scope"
+        )
+    });
+    let detail = if let Some(code) = code {
+        format!("; {code}")
+    } else if let Some(code) = value["subStatus"].as_u64() {
+        format!("; code {code}")
+    } else {
+        String::new()
+    };
+    let hint = match code {
+        Some("invalid_client" | "unauthorized_client") => {
+            " TIDAL rejected this app's sign-in client; signing in again may not resolve it."
+        }
+        Some("invalid_grant") => " TIDAL did not accept the sign-in code or refresh token.",
+        _ if status == StatusCode::FORBIDDEN => {
+            " Check your subscription and this app's access permissions."
+        }
+        _ => "",
+    };
+    format!(
+        "TIDAL rejected {phase} (HTTP {}{detail}).{hint}",
+        status.as_u16()
+    )
+}
+
+async fn rejection_value(r: &mut Response) -> Value {
+    let mut bytes = Vec::new();
+    loop {
+        match r.chunk().await {
+            Ok(Some(chunk)) if bytes.len() + chunk.len() <= 16 * 1024 => {
+                bytes.extend_from_slice(&chunk)
+            }
+            Ok(None) => return serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            _ => return Value::Null,
+        }
+    }
+}
+
+async fn check_for(mut r: Response, phase: &'static str) -> Result<Response> {
     match r.status() {
         s if s.is_success() => Ok(r),
-        StatusCode::UNAUTHORIZED => bail!("Your TIDAL session expired. Please sign in again."),
-        StatusCode::FORBIDDEN => bail!(
-            "TIDAL denied access. Check your subscription and this client's playback permissions."
-        ),
+        status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST) => {
+            let value = rejection_value(&mut r).await;
+            bail!(rejection_message(status, phase, &value));
+        }
         StatusCode::TOO_MANY_REQUESTS => {
             bail!("TIDAL rate limit reached. Please wait before retrying.")
         }
@@ -1314,6 +1387,114 @@ mod tests {
             api.credentials.load().await.unwrap().unwrap().access_token,
             "synthetic-new"
         );
+    }
+
+    #[tokio::test]
+    async fn unavailable_asset_does_not_refresh_or_retry_and_next_track_can_play() {
+        use super::playlist_tests::{mock, step};
+        let mut unavailable = step(
+            "GET",
+            "/v1/tracks/1/playbackinfopostpaywall",
+            json!({"status":401,"subStatus":4005,"userMessage":"private-server-secret"}),
+        );
+        unavailable.status = 401;
+        let ready = step(
+            "GET",
+            "/v1/tracks/2/playbackinfopostpaywall",
+            manifest("NONE", "https://audio.tidal.com/synthetic.flac"),
+        );
+        let (mut api, server) = mock(vec![unavailable, ready]);
+        let root = tempfile::tempdir().unwrap();
+        api.credentials = crate::credentials::Store::at(root.path());
+        // A regression must fail locally, never contact the real token endpoint.
+        api.client = Client::builder()
+            .no_proxy()
+            .resolve_to_addrs("auth.tidal.com", &[])
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        api.session.as_mut().unwrap().pkce = true;
+        let message = api
+            .stream(1, "LOSSLESS")
+            .await
+            .err()
+            .expect("asset must be rejected")
+            .to_string();
+        assert!(message.contains("not ready for playback (code 4005)"));
+        assert!(!message.contains("private-server-secret"));
+        assert!(!message.contains("expired"));
+        assert_eq!(api.stream(2, "LOSSLESS").await.unwrap().quality, "LOSSLESS");
+        assert_eq!(api.session.as_ref().unwrap().access_token, "test-only");
+        assert!(!root.path().join("session.json").exists());
+        assert!(!api.credentials_dirty);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn asset_readiness_message_is_scoped_to_playback_401() {
+        let value = json!({"subStatus":4005});
+        for (status, phase) in [
+            (StatusCode::UNAUTHORIZED, "API request"),
+            (StatusCode::UNAUTHORIZED, "session renewal"),
+            (StatusCode::FORBIDDEN, "playback authorization"),
+        ] {
+            let message = rejection_message(status, phase, &value);
+            assert!(!message.contains("not ready for playback"));
+            assert!(message.contains("code 4005"));
+        }
+    }
+
+    #[test]
+    fn auth_rejections_do_not_claim_expiry_or_echo_private_server_content() {
+        let value = json!({"error":"private-server-secret","userMessage":"private-server-secret","error_description":"private-server-secret","access_token":"private-server-secret","subStatus":11003});
+        let message = rejection_message(StatusCode::UNAUTHORIZED, "API request", &value);
+        assert!(message.contains("HTTP 401; code 11003"));
+        assert!(!message.contains("private-server-secret"));
+        assert!(!message.contains("expired"));
+        let message = rejection_message(
+            StatusCode::BAD_REQUEST,
+            "session renewal",
+            &json!({"error":"invalid_grant","error_description":"private-server-secret"}),
+        );
+        assert!(message.contains("session renewal"));
+        assert!(message.contains("invalid_grant"));
+        assert!(!message.contains("private-server-secret"));
+        let message = rejection_message(
+            StatusCode::UNAUTHORIZED,
+            "lossless sign-in",
+            &json!({"error":"invalid_client"}),
+        );
+        assert!(message.contains("app's sign-in client"));
+    }
+
+    #[tokio::test]
+    async fn auth_response_diagnostics_are_bounded_and_phase_specific() {
+        use super::playlist_tests::{mock, step};
+        for oversized in [false, true] {
+            let mut response = step(
+                "GET",
+                "/v1/diagnostic",
+                json!({"error":"invalid_client","error_description":"private-server-secret".repeat(if oversized {2000} else {1})}),
+            );
+            response.status = 401;
+            let (api, server) = mock(vec![response]);
+            let response = api
+                .client
+                .get(format!("{}/v1/diagnostic", api.base))
+                .query(&[("fixture", "1")])
+                .send()
+                .await
+                .unwrap();
+            let message = check_for(response, "session renewal")
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(message.contains("session renewal"));
+            assert!(message.contains("HTTP 401"));
+            assert!(!message.contains("private-server-secret"));
+            assert_eq!(message.contains("invalid_client"), !oversized);
+            server.join().unwrap();
+        }
     }
 
     #[test]
