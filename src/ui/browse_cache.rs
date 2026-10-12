@@ -50,6 +50,7 @@ fn same_location(a: &Location, b: &Location) -> bool {
 }
 impl App {
     pub(super) fn invalidate_browse_cache(&mut self) {
+        self.library_load = None;
         self.browse_cache.entries.clear();
         if self.browse_cache.owner != self.account || !self.connected {
             self.browse_cache.restored = false;

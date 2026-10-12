@@ -216,6 +216,20 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Full saved-library loading (v0.15.0)
+
+Library → Tracks, Albums or Artists offers **Load all saved …** while more pages
+remain. It reads one page at a time, up to 50,000 entries, without changing playback,
+the queue or your favorites. **Stop loading** keeps loaded items; an in-flight page
+may still finish. Loading also stops on navigation, refresh, account changes, local
+writes, errors or closing the window, and yields while playback buffers.
+
+Additional-page duplicates are skipped; repeated pages and changing counts stop
+safely. Unavailable items and unknown totals do not turn unknown favorite status
+into “not saved.” These are best-effort reads, not an atomic library snapshot;
+use **Refresh** for changes made elsewhere. Loaded songs remain available for the
+existing filter/sort and selection actions.
+
 ## Restored browse views (v0.14.0)
 
 **Back / Forward** can restore recent loaded catalog, search and library views,

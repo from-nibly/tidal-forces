@@ -20,6 +20,7 @@ mod export;
 mod favorite_cache;
 mod history;
 mod library;
+mod library_load;
 pub(crate) mod navigation;
 mod playback;
 mod playlist_load;
@@ -100,6 +101,7 @@ pub struct App {
     track_selection: selection::Selection,
     track_view: track_view::View,
     playlist_load: Option<playlist_load::PlaylistLoad>,
+    library_load: Option<library_load::LibraryLoad>,
     albums: Vec<Album>,
     artists: Vec<Artist>,
     mixes: Vec<Mix>,
@@ -221,6 +223,7 @@ impl App {
             track_selection: selection::Selection::default(),
             track_view: track_view::View::default(),
             playlist_load: None,
+            library_load: None,
             albums: vec![],
             artists: vec![],
             mixes: vec![],
@@ -389,6 +392,7 @@ impl App {
         self.track_selection.clear();
         self.track_view = Default::default();
         self.playlist_load = None;
+        self.library_load = None;
         self.albums.clear();
         self.artists.clear();
         self.more = false;
@@ -426,6 +430,7 @@ impl App {
     fn load_page(&mut self, offset: usize) {
         if offset == 0 {
             self.playlist_load = None;
+            self.library_load = None;
             self.fresh_browse_read();
         }
         self.loading = true;
@@ -778,9 +783,12 @@ impl App {
                 Event::Library {
                     generation,
                     kind,
-                    page,
+                    mut page,
                     append,
                 } if generation == self.generation => {
+                    if !self.accept_library_load_page(generation, kind, &mut page, append) {
+                        continue;
+                    }
                     if !append {
                         self.browse_cache.restored = false;
                         self.track_selection.clear();
@@ -938,6 +946,7 @@ impl App {
                     message,
                 } if generation == self.generation => {
                     self.playlist_load = None;
+                    self.library_load = None;
                     self.browse_cache.ready = false;
                     self.loading = false;
                     self.error = Some(message);
@@ -2094,6 +2103,9 @@ impl App {
         ui.add_space(if short { 8. } else { 18. });
         if self.page.is_library() {
             self.library_tabs(ui);
+            if self.page != Page::Library(FavoriteKind::Tracks) {
+                self.library_load_controls(ui);
+            }
         }
         if self.page == Page::Playlists {
             if ui
@@ -2106,7 +2118,7 @@ impl App {
             return;
         }
         let mut favorite = None;
-        if self.loading {
+        if self.loading && self.library_load.is_none() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Loading your music…");
@@ -2230,7 +2242,10 @@ impl App {
             }
             if self.more
                 && ui
-                    .add_enabled(!self.loading, egui::Button::new("Load more"))
+                    .add_enabled(
+                        !self.loading && self.library_load.is_none(),
+                        egui::Button::new("Load more"),
+                    )
                     .clicked()
             {
                 self.load_page(self.library_offset);
@@ -2264,34 +2279,63 @@ impl App {
             }
             ui.add_space(26.);
         }
-        ui.horizontal(|ui| {
-            surfaces::section_title(
-                ui,
-                match self.page {
-                    Page::Home => "Today's discovery",
-                    Page::Library(FavoriteKind::Tracks) => "Favorite tracks",
-                    _ => "Tracks",
-                },
-            );
-            if !self.tracks.is_empty() {
-                ui.label(
-                    RichText::new(format!("{} loaded", self.tracks.len()))
-                        .size(12.)
-                        .color(MUTED),
-                );
-                if !collection
-                    && ui
+        if self.page == Page::Library(FavoriteKind::Tracks) {
+            if self.library_load.is_some() {
+                self.library_load_controls(ui);
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} tracks loaded", self.tracks.len()))
+                            .size(12.)
+                            .color(MUTED),
+                    );
+                    if ui
                         .add_enabled(
-                            self.audio_available,
-                            egui::Button::new(RichText::new("Play all").color(BG)).fill(ACCENT),
+                            self.audio_available && !self.loading && !self.tracks.is_empty(),
+                            egui::Button::new(if self.track_view.active() {
+                                "Play shown"
+                            } else {
+                                "Play all"
+                            }),
                         )
                         .clicked()
-                {
-                    self.play_track(0);
-                }
+                    {
+                        self.play_collection(false);
+                    }
+                    self.library_load_controls(ui);
+                });
             }
-        });
-        ui.add_space(8.);
+            ui.add_space(12.);
+        } else {
+            ui.horizontal(|ui| {
+                surfaces::section_title(
+                    ui,
+                    match self.page {
+                        Page::Home => "Today's discovery",
+                        Page::Library(FavoriteKind::Tracks) => "Favorite tracks",
+                        _ => "Tracks",
+                    },
+                );
+                if !self.tracks.is_empty() {
+                    ui.label(
+                        RichText::new(format!("{} loaded", self.tracks.len()))
+                            .size(12.)
+                            .color(MUTED),
+                    );
+                    if !collection
+                        && ui
+                            .add_enabled(
+                                self.audio_available,
+                                egui::Button::new(RichText::new("Play all").color(BG)).fill(ACCENT),
+                            )
+                            .clicked()
+                    {
+                        self.play_track(0);
+                    }
+                }
+            });
+            ui.add_space(8.);
+        }
         if self.tracks.is_empty() && !self.loading {
             ui.add_space(20.);
             ui.label(
@@ -2312,7 +2356,7 @@ impl App {
         if self.more
             && ui
                 .add_enabled(
-                    !self.loading && self.playlist_load.is_none(),
+                    !self.loading && self.playlist_load.is_none() && self.library_load.is_none(),
                     egui::Button::new("Load more tracks"),
                 )
                 .clicked()
@@ -2540,6 +2584,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.viewport().close_requested()) {
             self.cancel_export(false);
             self.playlist_load = None;
+            self.library_load = None;
             self.stop_favorite_cache("Saved-status check stopped.");
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
@@ -2603,6 +2648,7 @@ impl eframe::App for App {
         self.prefetch_context();
         self.export_tick();
         self.playlist_load_tick();
+        self.library_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
         self.checkpoint_history(false);

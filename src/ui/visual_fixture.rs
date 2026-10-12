@@ -17,7 +17,11 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "history",
             "settings",
             "privacy",
-            "browse"
+            "browse",
+            "library-load",
+            "library-loading",
+            "library-albums",
+            "library-selected"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -266,7 +270,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.settings_section = SettingsSection::Appearance;
             Page::Settings
         }
-        "albums" => {
+        "library-load" | "library-loading" | "library-selected" => {
+            Page::Library(FavoriteKind::Tracks)
+        }
+        "albums" | "library-albums" => {
             app.albums = app.tracks[..4]
                 .iter()
                 .map(|t| Album {
@@ -301,6 +308,22 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             title: "Night drives".into(),
         },
     };
+    if matches!(
+        page,
+        "library-load" | "library-loading" | "library-albums" | "library-selected"
+    ) {
+        if page == "library-albums" {
+            app.tracks.clear();
+        }
+        app.library_offset = app.tracks.len() + app.albums.len();
+        app.library_total = Some(205);
+        app.more = true;
+        app.browse_loaded();
+        if page == "library-loading" {
+            app.start_library_load();
+            app.loading = true;
+        }
+    }
     if page == "load" {
         app.more = true;
         let playlist = app.playlist_page.as_mut().unwrap();
@@ -315,7 +338,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         app.browse_loaded();
         app.browse_cache.restored = true;
     }
-    if page == "selection" {
+    if matches!(page, "selection" | "library-selected") {
         app.track_selection
             .sync(app.account, app.generation, app.tracks.len());
         for row in [0, 1, 3] {
@@ -329,6 +352,50 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
 mod tests {
     use super::*;
     use eframe::App as _;
+    #[test]
+    fn library_controls_fit_minimum_normal_and_zoom_equivalent_widths() {
+        for size in [vec2(1000., 660.), vec2(1240., 820.), vec2(667., 440.)] {
+            for scene in ["library-load", "library-loading", "library-selected"] {
+                let ctx = egui::Context::default();
+                let mut app = fixture(&ctx, scene);
+                let draw = |app: &mut App| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+                    )
+                };
+                draw(&mut app);
+                let output = draw(&mut app);
+                let mut stop_seen = false;
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape {
+                        let label = text.galley.job.text.as_str();
+                        if matches!(
+                            label,
+                            "Stop loading"
+                                | "Selection actions"
+                                | "Copy links"
+                                | "Load all saved tracks"
+                        ) {
+                            assert!(
+                                text.pos.x + text.galley.size().x <= size.x,
+                                "{scene}: {label} exceeds width {}",
+                                size.x
+                            );
+                            stop_seen |= label == "Stop loading";
+                        }
+                    }
+                }
+                if scene == "library-loading" {
+                    assert!(stop_seen);
+                }
+            }
+        }
+    }
+
     #[test]
     fn fixture_has_no_live_services_and_strips_input_before_widget_interaction() {
         let ctx = egui::Context::default();

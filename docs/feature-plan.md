@@ -1,8 +1,8 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.14.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.14.0 (`7df1c04ce640`); managed pin `8dfe421`.
-Approved: v0.14.1 Wayland background responsiveness fix; publication/deployment in progress.
+**Status: v0.14.1 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.14.1 (`5daf155fb5e8`); managed pin `4cb7f0c`.
+Approved: v0.15.0 full saved-library loading and roadmap control polish; deployment in progress.
 A signed-out native reproduction confirmed blocking EGL vsync on hidden Hyprland
 workspaces. Disabling vsync only for winit's Linux Wayland selection fixes hidden
 rendering/close processing; X11 retains vsync. Both native backends and 199 tests
@@ -21,6 +21,33 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3g slice (v0.15.0)
+
+Library tracks, albums and artists gain explicit **Load all saved …** and **Stop
+loading** controls. Reads proceed one page at a time, bounded to 50,000 raw entries,
+and yield while playback is buffering. Navigation, refresh, account changes, local
+writes, errors and close stop follow-up requests. An in-flight stopped page may
+finish; previously loaded rows and source-occurrence selection stay intact.
+
+Counts (when supplied), raw offsets, category, account/generation, progress and
+terminal boundaries are validated before merging. Additional-page overlaps are
+skipped; a wholly repeated page stops the operation with an explanation. Unknown
+totals and unavailable rows remain positive-only observations. These non-atomic,
+possibly cached reads never establish absence in favorite membership, never start
+playback and never replace the queue. Refresh remains necessary for external
+changes. Album catalog loading and persistent caches remain separate future work.
+
+The library controls now follow the roadmap: teal category tabs and divider,
+compact utility row, expanding filter, quieter sort/reverse controls and a tinted
+selection strip. The strip retains stable geometry to protect keyboard focus and
+successive Ctrl/Shift-click targets. Only supported actions are exposed.
+
+Validation: 210 normal tests, strict checks and native minimum/normal/high-zoom
+fixtures, including selection retention, actual button input, three categories,
+overlap, sparse reads, bounds, cancellation and worker backpressure. The user
+confirmed the feature and requested this visual pass followed by publication and
+installation; the feedback is resolved.
 
 ## Approved P3f slice (v0.14.0)
 

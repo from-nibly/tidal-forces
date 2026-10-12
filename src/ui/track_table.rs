@@ -126,45 +126,84 @@ impl App {
             return;
         }
         self.sync_track_view();
-        ui.horizontal_wrapped(|ui| {
-            let filter = ui.add_enabled(
-                !self.loading,
-                egui::TextEdit::singleline(&mut self.track_view.query)
-                    .id(egui::Id::new("track-filter"))
-                    .hint_text("Filter loaded songs")
-                    .desired_width(190.)
-                    .min_size(vec2(190., 28.))
-                    .margin(vec2(6., 5.))
-                    .char_limit(256),
-            );
-            if filter.has_focus() {
-                self.track_selection.pending_focus = None;
-                if ui.ctx().content_rect().width() < 1180. {
-                    self.queue_open = false;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8., 8.);
+            ui.spacing_mut().interact_size.y = 34.;
+            ui.horizontal_wrapped(|ui| {
+                let reserved = if self.track_view.active() { 360. } else { 260. };
+                let filter_width = (ui.available_width() - reserved)
+                    .max(140.)
+                    .min(ui.available_width());
+                let filter = ui.add_enabled(
+                    !self.loading,
+                    egui::TextEdit::singleline(&mut self.track_view.query)
+                        .id(egui::Id::new("track-filter"))
+                        .hint_text("Filter loaded songs")
+                        .desired_width(filter_width)
+                        .min_size(vec2(0., 34.))
+                        .font(egui::FontId::proportional(13.))
+                        .background_color(Color32::from_rgb(22, 25, 30))
+                        .margin(egui::Margin {
+                            left: 30,
+                            right: 10,
+                            top: 8,
+                            bottom: 8,
+                        })
+                        .char_limit(256),
+                );
+                paint_icon(
+                    ui.painter(),
+                    Icon::Search,
+                    pos2(filter.rect.left() + 14., filter.rect.center().y),
+                    14.,
+                    MUTED,
+                );
+                if filter.has_focus() {
+                    self.track_selection.pending_focus = None;
+                    if ui.ctx().content_rect().width() < 1180. {
+                        self.queue_open = false;
+                    }
                 }
-            }
-            ui.add_enabled_ui(!self.loading, |ui| {
-                egui::ComboBox::from_id_salt("track-sort")
-                    .selected_text(self.track_view.sort.label())
-                    .show_ui(ui, |ui| {
-                        for sort in [
-                            track_view::Sort::Original,
-                            track_view::Sort::Title,
-                            track_view::Sort::Artist,
-                            track_view::Sort::Album,
-                            track_view::Sort::Duration,
-                        ] {
-                            ui.selectable_value(&mut self.track_view.sort, sort, sort.label());
-                        }
-                    });
-                ui.checkbox(&mut self.track_view.reverse, "Reverse");
-                if self.track_view.active() && ui.button("Reset view").clicked() {
-                    self.track_view.query.clear();
-                    self.track_view.sort = track_view::Sort::Original;
-                    self.track_view.reverse = false;
-                }
+                ui.add_enabled_ui(!self.loading, |ui| {
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+                    egui::ComboBox::from_id_salt("track-sort")
+                        .width(128.)
+                        .selected_text(
+                            RichText::new(self.track_view.sort.label())
+                                .size(12.)
+                                .color(MUTED),
+                        )
+                        .show_ui(ui, |ui| {
+                            for sort in [
+                                track_view::Sort::Original,
+                                track_view::Sort::Title,
+                                track_view::Sort::Artist,
+                                track_view::Sort::Album,
+                                track_view::Sort::Duration,
+                            ] {
+                                ui.selectable_value(&mut self.track_view.sort, sort, sort.label());
+                            }
+                        });
+                    if ui
+                        .selectable_label(
+                            self.track_view.reverse,
+                            RichText::new("Reverse").size(12.),
+                        )
+                        .on_hover_text("Reverse the shown order")
+                        .clicked()
+                    {
+                        self.track_view.reverse = !self.track_view.reverse;
+                    }
+                    if self.track_view.active() && ui.button("Reset view").clicked() {
+                        self.track_view.query.clear();
+                        self.track_view.sort = track_view::Sort::Original;
+                        self.track_view.reverse = false;
+                    }
+                });
             });
         });
+        ui.add_space(8.);
         self.sync_track_view();
         if self.track_view.active() {
             ui.label(
@@ -179,18 +218,28 @@ impl App {
         }
         let rows = &self.track_view.rows;
         let mut selection_action = None;
+        // Keep this strip's geometry stable when selection changes so row focus
+        // and successive Ctrl/Shift-click targets do not move underneath input.
+        egui::Frame::new().fill(if self.track_selection.rows.is_empty() { PANEL } else { Color32::from_rgb(23,48,50) }).stroke(Stroke::new(1.0_f32,Color32::from_rgb(49,90,92))).corner_radius(5.).inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui| {
+        ui.set_min_width(ui.available_width());
+        ui.spacing_mut().item_spacing.x=10.;
+        ui.visuals_mut().widgets.inactive.weak_bg_fill=Color32::from_rgb(33,64,68);
+        ui.visuals_mut().widgets.inactive.bg_stroke=Stroke::new(1.0_f32,Color32::from_rgb(54,94,96));
         ui.horizontal_wrapped(|ui| {
-            ui.add_sized(vec2(100.,28.),egui::Label::new(RichText::new(format!("{} selected",self.track_selection.rows.len())).size(12.).color(MUTED)))
+            ui.add_sized(vec2((ui.available_width()-310.).max(90.),28.),egui::Label::new(RichText::new(format!("{} selected",self.track_selection.rows.len())).size(12.).strong()).halign(egui::Align::LEFT))
                 .on_hover_text("Selection refers to loaded track occurrences, including duplicates. Ctrl/Shift-click to select; Ctrl+A selects shown tracks; Ctrl+C copies links in view order when the table has focus.");
             ui.add_enabled_ui(!self.loading && !self.track_selection.rows.is_empty(),|ui| {
                 if ui.button("Copy links").clicked() { selection_action=Some(SelectionAction::Copy); }
                 ui.menu_button("Selection actions",|ui| {
-                    for (label,action) in [("Play next",SelectionAction::Next),("Add to Up next",SelectionAction::Append),("Clear selection",SelectionAction::Clear)] {
+                    for (label,action) in [("Play next",SelectionAction::Next),("Add to Up next",SelectionAction::Append)] {
                         if ui.button(label).clicked() {selection_action=Some(action);ui.close();}
                     }
                 });
+                if ui.button("Clear").clicked() { selection_action=Some(SelectionAction::Clear); }
             });
         });
+        });
+        ui.add_space(10.);
         if rows.is_empty() {
             ui.label("No matching songs in the loaded tracks.");
             return;

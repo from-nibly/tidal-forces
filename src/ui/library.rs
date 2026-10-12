@@ -3,30 +3,51 @@ use super::*;
 impl App {
     pub(super) fn library_tabs(&mut self, ui: &mut egui::Ui) {
         let mut selected = None;
-        ui.horizontal_wrapped(|ui| {
-            for kind in FavoriteKind::ALL {
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding = vec2(9., 6.);
+            ui.spacing_mut().interact_size.y = 32.;
+            ui.visuals_mut().selection.bg_fill = Color32::from_rgb(25, 52, 54);
+            ui.horizontal_wrapped(|ui| {
+                for kind in FavoriteKind::ALL {
+                    if ui
+                        .selectable_label(
+                            self.page == Page::Library(kind),
+                            RichText::new(kind.label()).size(12.).color(
+                                if self.page == Page::Library(kind) {
+                                    ACCENT
+                                } else {
+                                    MUTED
+                                },
+                            ),
+                        )
+                        .clicked()
+                    {
+                        selected = Some(Page::Library(kind));
+                    }
+                }
                 if ui
-                    .selectable_label(self.page == Page::Library(kind), kind.label())
+                    .selectable_label(
+                        self.page == Page::Playlists,
+                        RichText::new("Playlists & folders").size(12.).color(
+                            if self.page == Page::Playlists {
+                                ACCENT
+                            } else {
+                                MUTED
+                            },
+                        ),
+                    )
                     .clicked()
                 {
-                    selected = Some(Page::Library(kind));
+                    selected = Some(Page::Playlists);
                 }
-            }
-            if ui
-                .selectable_label(self.page == Page::Playlists, "Playlists & folders")
-                .clicked()
-            {
-                selected = Some(Page::Playlists);
-            }
+            });
         });
+        ui.add_space(8.);
+        ui.separator();
         if let Some(page) = selected {
             self.navigate(page);
         }
-        ui.add_space(if ui.ctx().content_rect().height() < 600. {
-            8.
-        } else {
-            16.
-        });
+        ui.add_space(12.);
     }
 
     pub(super) fn set_favorite(&mut self, item: Favorite, saved: bool) {
