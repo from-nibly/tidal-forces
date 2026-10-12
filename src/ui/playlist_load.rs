@@ -54,7 +54,7 @@ impl App {
     }
     pub(super) fn playlist_load_controls(&mut self, ui: &mut egui::Ui) {
         if self.playlist_load.is_some() {
-            ui.horizontal(|ui| {ui.spinner();ui.label(format!("Loading playlist · {} songs available",self.tracks.len()));if ui.button("Stop loading").clicked() {self.playlist_load=None;}});
+            ui.horizontal_wrapped(|ui| {ui.spinner();ui.label("Loading…").on_hover_text(format!("{} songs available",self.tracks.len()));if ui.button("Stop loading").clicked() {self.playlist_load=None;}});
         } else if self.playlist_page.is_some() && self.more && ui.add_enabled(self.playlist_load_target().is_some(),egui::Button::new("Load all playlist songs")).on_hover_text("Read the remaining playlist pages for filtering and sorting. Does not change playback. Limited to 50,000 playlist entries.").clicked() {
             self.start_playlist_load();
         }

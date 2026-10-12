@@ -126,11 +126,12 @@ impl App {
             return;
         }
         self.sync_track_view();
+        let mut selection_action = None;
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing = vec2(8., 8.);
             ui.spacing_mut().interact_size.y = 34.;
             ui.horizontal_wrapped(|ui| {
-                let reserved = if self.track_view.active() { 360. } else { 260. };
+                let reserved = 230.;
                 let filter_width = (ui.available_width() - reserved)
                     .max(140.)
                     .min(ui.available_width());
@@ -185,21 +186,52 @@ impl App {
                                 ui.selectable_value(&mut self.track_view.sort, sort, sort.label());
                             }
                         });
-                    if ui
-                        .selectable_label(
-                            self.track_view.reverse,
-                            RichText::new("Reverse").size(12.),
+                    let menu = ui
+                        .add(egui::Button::new("").min_size(vec2(34., 34.)))
+                        .on_hover_text(format!(
+                            "Track actions · {} selected",
+                            self.track_selection.rows.len()
+                        ));
+                    menu.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            "Track actions",
                         )
-                        .on_hover_text("Reverse the shown order")
-                        .clicked()
-                    {
-                        self.track_view.reverse = !self.track_view.reverse;
-                    }
-                    if self.track_view.active() && ui.button("Reset view").clicked() {
-                        self.track_view.query.clear();
-                        self.track_view.sort = track_view::Sort::Original;
-                        self.track_view.reverse = false;
-                    }
+                    });
+                    paint_icon(ui.painter(), Icon::Queue, menu.rect.center(), 16., MUTED);
+                    egui::Popup::menu(&menu).show(|ui| {
+                        ui.label(format!("{} selected", self.track_selection.rows.len()));
+                        ui.add_enabled_ui(!self.track_selection.rows.is_empty(), |ui| {
+                            if ui.button("Copy links").clicked() {
+                                selection_action = Some(SelectionAction::Copy);
+                                ui.close();
+                            }
+                            ui.menu_button("Selection actions", |ui| {
+                                for (label, action) in [
+                                    ("Play next", SelectionAction::Next),
+                                    ("Add to Up next", SelectionAction::Append),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        selection_action = Some(action);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            if ui.button("Clear").clicked() {
+                                selection_action = Some(SelectionAction::Clear);
+                                ui.close();
+                            }
+                        });
+                        ui.separator();
+                        ui.checkbox(&mut self.track_view.reverse, "Reverse");
+                        if self.track_view.active() && ui.button("Reset view").clicked() {
+                            self.track_view.query.clear();
+                            self.track_view.sort = track_view::Sort::Original;
+                            self.track_view.reverse = false;
+                            ui.close();
+                        }
+                    });
                 });
             });
         });
@@ -217,29 +249,6 @@ impl App {
             );
         }
         let rows = &self.track_view.rows;
-        let mut selection_action = None;
-        // Keep this strip's geometry stable when selection changes so row focus
-        // and successive Ctrl/Shift-click targets do not move underneath input.
-        egui::Frame::new().fill(if self.track_selection.rows.is_empty() { PANEL } else { Color32::from_rgb(23,48,50) }).stroke(Stroke::new(1.0_f32,Color32::from_rgb(49,90,92))).corner_radius(5.).inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui| {
-        ui.set_min_width(ui.available_width());
-        ui.spacing_mut().item_spacing.x=10.;
-        ui.visuals_mut().widgets.inactive.weak_bg_fill=Color32::from_rgb(33,64,68);
-        ui.visuals_mut().widgets.inactive.bg_stroke=Stroke::new(1.0_f32,Color32::from_rgb(54,94,96));
-        ui.horizontal_wrapped(|ui| {
-            ui.add_sized(vec2((ui.available_width()-310.).max(90.),28.),egui::Label::new(RichText::new(format!("{} selected",self.track_selection.rows.len())).size(12.).strong()).halign(egui::Align::LEFT))
-                .on_hover_text("Selection refers to loaded track occurrences, including duplicates. Ctrl/Shift-click to select; Ctrl+A selects shown tracks; Ctrl+C copies links in view order when the table has focus.");
-            ui.add_enabled_ui(!self.loading && !self.track_selection.rows.is_empty(),|ui| {
-                if ui.button("Copy links").clicked() { selection_action=Some(SelectionAction::Copy); }
-                ui.menu_button("Selection actions",|ui| {
-                    for (label,action) in [("Play next",SelectionAction::Next),("Add to Up next",SelectionAction::Append)] {
-                        if ui.button(label).clicked() {selection_action=Some(action);ui.close();}
-                    }
-                });
-                if ui.button("Clear").clicked() { selection_action=Some(SelectionAction::Clear); }
-            });
-        });
-        });
-        ui.add_space(10.);
         if rows.is_empty() {
             ui.label("No matching songs in the loaded tracks.");
             return;

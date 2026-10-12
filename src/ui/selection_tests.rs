@@ -94,6 +94,61 @@ fn tracks() -> Vec<Track> {
 }
 
 #[test]
+fn overflow_menu_contains_selection_actions_and_reverse_without_changing_playback() {
+    let (ctx, mut app, _events, mut requests) = fixture();
+    app.tracks = tracks();
+    app.track_selection
+        .sync(app.account, app.generation, app.tracks.len());
+    app.track_selection.select(0, false, false);
+    app.track_selection.select(1, true, false);
+    draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    assert!(!output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(t) if matches!(t.galley.job.text.as_str(),"Copy links"|"Selection actions"|"Clear"|"Reverse"))));
+    let menu = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::LineSegment { points, .. }
+                if (points[0].y - points[1].y).abs() < 0.01
+                    && ((points[1].x - points[0].x).abs() - 12.8).abs() < 0.01 =>
+            {
+                Some(points[0].lerp(points[1], 0.5))
+            }
+            _ => None,
+        })
+        .expect("hamburger glyph");
+    click(&ctx, &mut app, menu, egui::Modifiers::NONE);
+    let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    for label in ["Copy links", "Selection actions", "Clear", "Reverse"] {
+        point(&output, label);
+    }
+    click(
+        &ctx,
+        &mut app,
+        point(&output, "Reverse"),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.track_view.reverse);
+    draw(
+        &ctx,
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        false,
+    );
+    click(&ctx, &mut app, menu, egui::Modifiers::NONE);
+    let output = draw(&ctx, &mut app, egui::Modifiers::NONE, vec![], false);
+    click(
+        &ctx,
+        &mut app,
+        point(&output, "Clear"),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.track_selection.rows.is_empty());
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn modifier_selection_copies_duplicates_without_playing_and_bulk_queue_keeps_order() {
     let (ctx, mut app, _events, mut requests) = fixture();
     app.tracks = tracks();

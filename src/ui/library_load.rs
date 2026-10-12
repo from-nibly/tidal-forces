@@ -78,7 +78,7 @@ impl App {
         if self.library_load.is_some() {
             ui.horizontal_wrapped(|ui| {
                 ui.spinner();
-                ui.label(format!("Loading saved {} · {} entries read", kind.label().to_lowercase(), self.library_offset));
+                ui.label(if kind == FavoriteKind::Tracks { "Loading…".into() } else { format!("Loading saved {}", kind.label().to_lowercase()) }).on_hover_text(format!("{} entries read", self.library_offset));
                 if ui.button("Stop loading").clicked() { self.library_load = None; }
             });
         } else if self.more && ui.add_enabled(self.can_load_library(),

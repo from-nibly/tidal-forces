@@ -2066,16 +2066,16 @@ impl App {
         let collection = matches!(self.page, Page::Collection { .. });
         if collection {
             ui.add_space(12.);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(self.audio_available && !self.loading && !self.track_view.rows.is_empty(), |ui| {
                     if surfaces::action_button(ui,Icon::Play,if self.track_view.active() {"Play shown"} else {"Play"},true).on_hover_text("Play the current view · Filtering/sorting uses loaded songs only · Manual Up next is preserved").clicked() { self.play_collection(false); }
                     if surfaces::action_button(ui,Icon::Shuffle,if self.track_view.active() {"Shuffle shown"} else {"Shuffle"},false).on_hover_text("Shuffle the current view · Filtering/sorting uses loaded songs only · Manual Up next stays ordered.").clicked() { self.play_collection(true); }
                 });
+                ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(MUTED));
+                self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
                 if let Some(page) = &self.playlist_page {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                        ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
-                    });
+                    ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
                 }
             });
         }
@@ -2280,33 +2280,42 @@ impl App {
             ui.add_space(26.);
         }
         if self.page == Page::Library(FavoriteKind::Tracks) {
-            if self.library_load.is_some() {
-                self.library_load_controls(ui);
-            } else {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(format!("{} tracks loaded", self.tracks.len()))
-                            .size(12.)
-                            .color(MUTED),
-                    );
-                    if ui
-                        .add_enabled(
-                            self.audio_available && !self.loading && !self.tracks.is_empty(),
-                            egui::Button::new(if self.track_view.active() {
-                                "Play shown"
-                            } else {
-                                "Play all"
-                            }),
-                        )
-                        .clicked()
-                    {
-                        self.play_collection(false);
-                    }
-                    self.library_load_controls(ui);
-                });
-            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!("{} tracks loaded", self.tracks.len()))
+                        .size(12.)
+                        .color(MUTED),
+                );
+                if ui
+                    .add_enabled(
+                        self.audio_available && !self.loading && !self.tracks.is_empty(),
+                        egui::Button::new(if self.track_view.active() {
+                            "Play shown"
+                        } else {
+                            "Play all"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.play_collection(false);
+                }
+                if ui
+                    .add_enabled(
+                        self.audio_available && !self.loading && !self.tracks.is_empty(),
+                        egui::Button::new(if self.track_view.active() {
+                            "Shuffle shown"
+                        } else {
+                            "Shuffle"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.play_collection(true);
+                }
+                self.track_loading_controls(ui);
+            });
             ui.add_space(12.);
-        } else {
+        } else if !collection {
             ui.horizontal(|ui| {
                 surfaces::section_title(
                     ui,
@@ -2333,6 +2342,7 @@ impl App {
                         self.play_track(0);
                     }
                 }
+                self.track_loading_controls(ui);
             });
             ui.add_space(8.);
         }
@@ -2351,9 +2361,15 @@ impl App {
                 .color(MUTED),
             );
         }
-        self.playlist_load_controls(ui);
         self.track_list(ui);
+    }
+
+    fn track_loading_controls(&mut self, ui: &mut egui::Ui) {
+        self.playlist_load_controls(ui);
+        self.library_load_controls(ui);
         if self.more
+            && self.playlist_load.is_none()
+            && self.library_load.is_none()
             && ui
                 .add_enabled(
                     !self.loading && self.playlist_load.is_none() && self.library_load.is_none(),

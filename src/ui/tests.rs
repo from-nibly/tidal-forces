@@ -296,11 +296,16 @@ fn collection_header_actions_start_once_and_preserve_manual_queue_and_raw_contin
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "Tracks" => Some(text.pos.y),
+                egui::Shape::Text(text) if text.galley.job.text.starts_with("Tracks · ") => {
+                    Some(text.pos.y + text.galley.size().y * 0.5)
+                }
                 _ => None,
             })
             .unwrap();
-        assert!(position.y < table_heading);
+        assert!(
+            (position.y - table_heading).abs() < 12.,
+            "Track count belongs in the play/shuffle row"
+        );
         assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text == "Play all")));
         for pressed in [true, false] {
             draw(

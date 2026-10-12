@@ -1,8 +1,14 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.14.1 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.14.1 (`5daf155fb5e8`); managed pin `4cb7f0c`.
-Approved: v0.15.0 full saved-library loading and roadmap control polish; deployment in progress.
+**Status: v0.15.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.15.0 (`bfcd62e530ff`); managed pin `b511353`.
+Approved: v0.16.0 compact track controls; publication/deployment in progress.
+Tracks/count and loading controls share the Play/Shuffle row; Copy links,
+Selection actions, Clear and Reverse are in the hamburger menu beside the sort
+selector. Keyboard selection and view-only playback are preserved. Validation:
+211 normal tests, strict Clippy and native responsive layout checks. Native review
+is complete and the user approved publication and installation. Guarded full album
+loading resumes after deployment.
 A signed-out native reproduction confirmed blocking EGL vsync on hidden Hyprland
 workspaces. Disabling vsync only for winit's Linux Wayland selection fixes hidden
 rendering/close processing; X11 retains vsync. Both native backends and 199 tests
