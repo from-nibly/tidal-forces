@@ -3,6 +3,26 @@ use super::*;
 use serde_json::json;
 
 #[tokio::test]
+async fn album_browse_pages_keep_raw_offsets_for_unavailable_entries() {
+    let mut response = step(
+        "GET",
+        "/v1/albums/12/tracks",
+        json!({"totalNumberOfItems":104,"items":[null,{"id":8,"title":"Repeated"},{"id":8,"title":"Repeated"}]}),
+    );
+    response.contains = vec!["offset=100", "limit=100"];
+    let (mut api, server) = mock(vec![response]);
+    let page = api.collection("albums", "12", 100).await.unwrap();
+    assert_eq!(page.next_offset, 103);
+    assert!(page.more);
+    assert_eq!(page.total, Some(104));
+    assert_eq!(
+        page.data.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [8, 8]
+    );
+    server.join().unwrap();
+}
+
+#[tokio::test]
 async fn album_continuation_loads_beyond_the_initial_hundred() {
     let mut page = step(
         "GET",

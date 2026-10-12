@@ -1,8 +1,9 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.15.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.15.0 (`bfcd62e530ff`); managed pin `b511353`.
-Approved: v0.16.0 compact track controls; publication/deployment in progress.
+**Status: v0.16.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.16.0 (`fcff69b37f96`); managed pin `3022286`.
+Approved: v0.17.0 guarded full album loading; publication/deployment in progress.
+Roadmap paused at operator request after deployment, pending reboot.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -27,6 +28,25 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3h slice (v0.17.0)
+
+Album pages retain raw pagination offsets and totals end-to-end instead of
+inferring progress from playable track count. Unavailable entries still advance
+pagination; repeated playable IDs remain separate album occurrences. Back/Forward
+snapshots retain this metadata, and playback continuation starts at the raw offset.
+
+**Load all album tracks** / **Stop loading** use one page at a time, capped at
+50,000 raw entries, with account/generation/identity/count/progress/end guards.
+Loading yields while playback buffers, cancels on navigation, refresh, mutations,
+account changes, errors or close, and never starts playback or changes the queue.
+An in-flight stopped page may finish. Album reads have no atomic revision token;
+Refresh remains necessary for external catalog changes.
+
+Validation: 218 normal tests, strict checks and native layouts/smoke. Covers sparse
+API pages, duplicate occurrences, raw playback continuation, malformed responses,
+stale generations, cached restoration, cancellation and size limits. No live
+account mutations or audible/device tests. Native version review approved by the operator.
 
 ## Approved P3g slice (v0.15.0)
 

@@ -146,6 +146,13 @@ pub enum Event {
         page: PlaylistPage,
         append: bool,
     },
+    CollectionPage {
+        generation: u64,
+        kind: String,
+        id: String,
+        offset: usize,
+        page: LibraryPage,
+    },
     CollectionTitle {
         generation: u64,
         title: String,
@@ -432,8 +439,8 @@ impl Backend {
                                     }
                                     Request::Collection { generation, kind, id, offset } => {
                                         if offset == 0 { events.send(Event::CollectionTitle { generation, title: api.collection_title(&kind, &id).await? }); }
-                                        let tracks = api.collection(&kind, &id, offset).await?;
-                                        events.send(Event::Tracks { generation, tracks, append: offset > 0 });
+                                        let page = api.collection(&kind, &id, offset).await?;
+                                        events.send(Event::CollectionPage { generation, kind, id, offset, page });
                                     }
                                     Request::ContextPage { user, generation, source } => {
                                         let result = api.context_page(user, &source).await.map_err(|e| e.to_string());

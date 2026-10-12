@@ -521,15 +521,19 @@ impl Api {
         Ok(tracks)
     }
 
-    pub async fn collection(&mut self, kind: &str, id: &str, offset: usize) -> Result<Vec<Track>> {
+    pub async fn collection(&mut self, kind: &str, id: &str, offset: usize) -> Result<LibraryPage> {
         validate_collection(kind, id)?;
+        anyhow::ensure!(
+            offset < crate::queue::MAX_ENTRIES,
+            "Collection size limit reached"
+        );
         let v = self
             .get(
                 &format!("{kind}/{id}/tracks"),
                 &[("limit", "100"), ("offset", &offset.to_string())],
             )
             .await?;
-        items(&v)
+        parse_library_page(v, FavoriteKind::Tracks, offset)
     }
 
     pub async fn context_page(&mut self, user: u64, source: &Continuation) -> Result<ContextPage> {

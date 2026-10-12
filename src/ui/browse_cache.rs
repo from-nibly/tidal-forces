@@ -17,6 +17,7 @@ struct Snapshot {
     location: Location,
     tracks: Vec<Track>,
     albums: Vec<Album>,
+    album_position: Option<album_load::Position>,
     artists: Vec<Artist>,
     playlist: Option<PlaylistPage>,
     more: bool,
@@ -51,6 +52,7 @@ fn same_location(a: &Location, b: &Location) -> bool {
 impl App {
     pub(super) fn invalidate_browse_cache(&mut self) {
         self.library_load = None;
+        self.album_load = None;
         self.browse_cache.entries.clear();
         if self.browse_cache.owner != self.account || !self.connected {
             self.browse_cache.restored = false;
@@ -108,6 +110,7 @@ impl App {
             location,
             tracks: std::mem::take(&mut self.tracks),
             albums: std::mem::take(&mut self.albums),
+            album_position: self.album_position.take(),
             artists: std::mem::take(&mut self.artists),
             playlist: self.playlist_page.take(),
             more: self.more,
@@ -138,6 +141,7 @@ impl App {
         self.page = snapshot.location.page;
         self.tracks = snapshot.tracks;
         self.albums = snapshot.albums;
+        self.album_position = snapshot.album_position;
         self.artists = snapshot.artists;
         self.playlist_page = snapshot.playlist;
         self.more = snapshot.more;

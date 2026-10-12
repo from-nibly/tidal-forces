@@ -21,7 +21,9 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "library-load",
             "library-loading",
             "library-albums",
-            "library-selected"
+            "library-selected",
+            "album-load",
+            "album-loading"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -270,6 +272,11 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.settings_section = SettingsSection::Appearance;
             Page::Settings
         }
+        "album-load" | "album-loading" => Page::Collection {
+            kind: "albums".into(),
+            id: "12".into(),
+            title: "Night Transit".into(),
+        },
         "library-load" | "library-loading" | "library-selected" => {
             Page::Library(FavoriteKind::Tracks)
         }
@@ -321,6 +328,19 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         app.browse_loaded();
         if page == "library-loading" {
             app.start_library_load();
+            app.loading = true;
+        }
+    }
+    if matches!(page, "album-load" | "album-loading") {
+        app.album_position = Some(album_load::Position {
+            id: "12".into(),
+            offset: 8,
+            total: Some(205),
+        });
+        app.more = true;
+        app.browse_loaded();
+        if page == "album-loading" {
+            app.start_album_load();
             app.loading = true;
         }
     }

@@ -14,6 +14,7 @@ use crate::{
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
+mod album_load;
 mod browse_cache;
 mod credentials;
 mod export;
@@ -102,6 +103,8 @@ pub struct App {
     track_view: track_view::View,
     playlist_load: Option<playlist_load::PlaylistLoad>,
     library_load: Option<library_load::LibraryLoad>,
+    album_position: Option<album_load::Position>,
+    album_load: Option<album_load::AlbumLoad>,
     albums: Vec<Album>,
     artists: Vec<Artist>,
     mixes: Vec<Mix>,
@@ -224,6 +227,8 @@ impl App {
             track_view: track_view::View::default(),
             playlist_load: None,
             library_load: None,
+            album_position: None,
+            album_load: None,
             albums: vec![],
             artists: vec![],
             mixes: vec![],
@@ -393,6 +398,8 @@ impl App {
         self.track_view = Default::default();
         self.playlist_load = None;
         self.library_load = None;
+        self.album_load = None;
+        self.album_position = None;
         self.albums.clear();
         self.artists.clear();
         self.more = false;
@@ -431,6 +438,7 @@ impl App {
         if offset == 0 {
             self.playlist_load = None;
             self.library_load = None;
+            self.album_load = None;
             self.fresh_browse_read();
         }
         self.loading = true;
@@ -517,6 +525,7 @@ impl App {
         self.playlist_dialog = false;
         self.playlist_target = None;
         self.playlist_page = None;
+        self.album_position = None;
         self.removal = None;
         self.owned_playlists.clear();
     }
@@ -849,6 +858,15 @@ impl App {
                     self.loading = false;
                     self.browse_loaded();
                 }
+                Event::CollectionPage {
+                    generation,
+                    kind,
+                    id,
+                    offset,
+                    page,
+                } => {
+                    self.album_page(generation, &kind, &id, offset, page);
+                }
                 Event::Tracks {
                     generation,
                     tracks,
@@ -947,6 +965,7 @@ impl App {
                 } if generation == self.generation => {
                     self.playlist_load = None;
                     self.library_load = None;
+                    self.album_load = None;
                     self.browse_cache.ready = false;
                     self.loading = false;
                     self.error = Some(message);
@@ -2367,18 +2386,26 @@ impl App {
     fn track_loading_controls(&mut self, ui: &mut egui::Ui) {
         self.playlist_load_controls(ui);
         self.library_load_controls(ui);
+        self.album_load_controls(ui);
         if self.more
             && self.playlist_load.is_none()
             && self.library_load.is_none()
+            && self.album_load.is_none()
             && ui
                 .add_enabled(
-                    !self.loading && self.playlist_load.is_none() && self.library_load.is_none(),
+                    !self.loading
+                        && self
+                            .album_position
+                            .as_ref()
+                            .is_none_or(|p| p.offset < crate::queue::MAX_ENTRIES),
                     egui::Button::new("Load more tracks"),
                 )
                 .clicked()
         {
             let offset = if matches!(self.page, Page::Library(_)) {
                 self.library_offset
+            } else if let Some(position) = &self.album_position {
+                position.offset
             } else {
                 self.playlist_page
                     .as_ref()
@@ -2601,6 +2628,7 @@ impl eframe::App for App {
             self.cancel_export(false);
             self.playlist_load = None;
             self.library_load = None;
+            self.album_load = None;
             self.stop_favorite_cache("Saved-status check stopped.");
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
@@ -2665,6 +2693,7 @@ impl eframe::App for App {
         self.export_tick();
         self.playlist_load_tick();
         self.library_load_tick();
+        self.album_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
         self.checkpoint_history(false);

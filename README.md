@@ -216,6 +216,19 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Full album loading (v0.17.0)
+
+Album pages offer **Load all album tracks** and **Stop loading**, reading at most
+50,000 entries one page at a time. Unavailable entries still advance pagination;
+repeated songs remain separate album occurrences. Loading does not start playback
+or change the queue, and a stopped in-flight page may finish.
+
+Navigation, refresh, account changes, local writes, read errors and closing stop
+follow-up reads. Back/Forward retains pagination metadata, and playback continues
+from the raw offset rather than the number of playable songs. Counts and progress
+are checked, but album reads are not atomic snapshots: Refresh checks external
+catalog changes.
+
 ## Full saved-library loading (v0.15.0)
 
 Library → Tracks, Albums or Artists offers **Load all saved …** while more pages

@@ -68,7 +68,10 @@ impl App {
                 Page::Collection { kind, id, .. } if kind == "albums" => {
                     id.parse().ok().map(|id| Continuation::Album {
                         id,
-                        offset: self.tracks.len(),
+                        offset: self
+                            .album_position
+                            .as_ref()
+                            .map_or(self.tracks.len(), |page| page.offset),
                     })
                 }
                 Page::Library(FavoriteKind::Tracks) => Some(Continuation::Favorites {
