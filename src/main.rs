@@ -24,6 +24,41 @@ mod visualizer_ui;
 
 use anyhow::{Context, Result};
 
+// Match winit's default Linux backend selection, not XDG_SESSION_TYPE (which
+// can be inherited from an older session). Wayland may withhold frame callbacks
+// for hidden windows; EGL vsync then blocks the UI thread in swap_buffers.
+// Keep the existing timed repaints, without blocking compositor ping handling.
+// https://github.com/emilk/egui/issues/5136
+fn native_vsync(wayland_display: Option<&str>, wayland_socket: Option<&str>) -> bool {
+    !cfg!(target_os = "linux")
+        || [wayland_display, wayland_socket]
+            .into_iter()
+            .flatten()
+            .all(str::is_empty)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod window_tests {
+    use super::native_vsync;
+
+    #[test]
+    fn x11_keeps_vsync_when_wayland_endpoints_are_absent_or_empty() {
+        assert!(native_vsync(None, None));
+        assert!(native_vsync(Some(""), None));
+        assert!(native_vsync(None, Some("")));
+        assert!(native_vsync(Some(""), Some("")));
+    }
+
+    #[test]
+    fn wayland_display_or_inherited_socket_disables_blocking_vsync() {
+        assert!(!native_vsync(Some("wayland-1"), None));
+        assert!(!native_vsync(None, Some("7")));
+        assert!(!native_vsync(Some(""), Some("7")));
+        assert!(!native_vsync(Some("wayland-1"), Some("")));
+        assert!(!native_vsync(Some("/run/example/wayland-1"), Some("7")));
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(debug_assertions)]
@@ -97,7 +132,10 @@ fn main() -> Result<()> {
             .with_inner_size([1240., 820.])
             .with_min_inner_size([1000., 660.]),
         renderer: eframe::Renderer::Glow,
-        vsync: true,
+        vsync: native_vsync(
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var("WAYLAND_SOCKET").ok().as_deref(),
+        ),
         ..Default::default()
     };
     let capture = screenshot.clone();

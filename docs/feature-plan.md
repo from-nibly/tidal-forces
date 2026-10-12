@@ -1,8 +1,12 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.13.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.13.0 (`9ebf7f04142f`); managed pin `ff2f1ab`.
-Approved: v0.14.0 bounded browse-view restoration; publication/deployment in progress.
+**Status: v0.14.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.14.0 (`7df1c04ce640`); managed pin `8dfe421`.
+Approved: v0.14.1 Wayland background responsiveness fix; publication/deployment in progress.
+A signed-out native reproduction confirmed blocking EGL vsync on hidden Hyprland
+workspaces. Disabling vsync only for winit's Linux Wayland selection fixes hidden
+rendering/close processing; X11 retains vsync. Both native backends and 199 tests
+pass. No running account/player, Home Manager or compositor configuration changed.
 Keep Rust/egui, native playback, one distributable executable, and the existing
 GitHub release → Home Manager deployment path. Do not introduce a web runtime.
 The local interactive companion is `.lavish/tidal-roadmap.html`.
