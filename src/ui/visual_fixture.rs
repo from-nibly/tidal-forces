@@ -24,7 +24,9 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "library-selected",
             "album-load",
             "album-loading",
-            "metadata"
+            "metadata",
+            "pins",
+            "pins-library"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -243,7 +245,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     if matches!(
         page,
-        "collection" | "selection" | "view" | "load" | "browse" | "metadata"
+        "collection" | "selection" | "view" | "load" | "browse" | "metadata" | "pins"
     ) {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
@@ -266,6 +268,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             .observe(Favorite::new(FavoriteKind::Tracks, id));
     }
     app.page = match page {
+        "pins-library" => Page::Playlists,
         "privacy" => {
             app.settings_section = SettingsSection::Privacy;
             Page::Settings
@@ -332,6 +335,12 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.start_library_load();
             app.loading = true;
         }
+    }
+    if matches!(page, "pins" | "pins-library") {
+        let mut pins = crate::pins::Pins::new(7);
+        pins.toggle("fixture-0", "Night drives").unwrap();
+        pins.toggle("fixture-2", "Late hours").unwrap();
+        app.pins = Some(pins);
     }
     if page == "metadata" {
         app.browse_loaded();

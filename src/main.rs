@@ -15,6 +15,7 @@ mod library;
 mod licenses;
 mod links;
 mod model;
+mod pins;
 mod player_state;
 mod queue;
 mod store;

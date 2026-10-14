@@ -23,6 +23,7 @@ mod history;
 mod library;
 mod library_load;
 pub(crate) mod navigation;
+mod pins;
 mod playback;
 mod playlist_load;
 mod playlist_metadata;
@@ -66,6 +67,9 @@ pub struct App {
     playlist_page: Option<PlaylistPage>,
     metadata_editor: Option<playlist_metadata::Editor>,
     metadata_serial: u64,
+    pins: Option<crate::pins::Pins>,
+    pins_error: Option<String>,
+    pins_root: Option<std::path::PathBuf>,
     playlist_dialog: bool,
     playlist_target: Option<Track>,
     owned_playlists: Vec<Playlist>,
@@ -176,6 +180,7 @@ impl App {
         app.screenshot = screenshot;
         app.media = media_result.ok();
         app.error = media_error.or(appearance_error);
+        app.pins_root = crate::store::config_dir().ok();
         match crate::store::config_dir().and_then(|root| StateStore::new(root, cc.egui_ctx.clone()))
         {
             Ok(store) => app.state_store = Some(store),
@@ -192,6 +197,9 @@ impl App {
             playlist_page: None,
             metadata_editor: None,
             metadata_serial: 0,
+            pins: None,
+            pins_error: None,
+            pins_root: None,
             playlist_dialog: false,
             playlist_target: None,
             owned_playlists: Vec::new(),
@@ -521,6 +529,7 @@ impl App {
         self.loading = false;
         self.connected = false;
         self.account = None;
+        self.load_pins();
         self.invalidate_browse_cache();
         self.favorites = Favorites::default();
         self.stop_favorite_cache("Signed out.");
@@ -747,6 +756,9 @@ impl App {
                     self.pkce_wait = false;
                     self.connected = account.is_some();
                     self.account = account.as_ref().map(|(user, _)| *user);
+                    if account_changed {
+                        self.load_pins();
+                    }
                     self.invalidate_browse_cache();
                     self.country = account.map(|(_, country)| country).unwrap_or_default();
                     self.favorites = Favorites::default();
@@ -1301,6 +1313,7 @@ impl App {
                     .max_height((ui.available_height() - 145.).max(50.))
                     .show(ui, |ui| {
                         if self.connected {
+                            self.pinned_playlists(ui);
                             self.folder_tree(ui, "root", 0);
                         } else {
                             ui.label(
@@ -2106,6 +2119,7 @@ impl App {
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
                 if self.playlist_page.as_ref().is_some_and(|p|p.editable && p.playlist.description.is_some()) && ui.add_enabled(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none(),egui::Button::new("Edit details…")).clicked() {self.open_metadata_editor();}
+                self.pin_control(ui);
                 if let Some(page) = &self.playlist_page {
                     ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
                 }
@@ -2140,6 +2154,7 @@ impl App {
             }
         }
         if self.page == Page::Playlists {
+            self.pinned_playlists(ui);
             if ui
                 .add_enabled(!self.playlist_busy, egui::Button::new("+ New playlist"))
                 .clicked()

@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Local playlist pins (v0.19.0)
+
+Use **Pin locally** on a loaded playlist to keep a shortcut on this device. Pins
+are account-scoped and also appear in **Library → Playlists & folders** in compact
+windows. Each pin's menu moves it up/down or removes it. This does not change
+TIDAL favorites, folder order, queue or playback.
+
+Up to 64 IDs and last-known labels are saved privately per account. Opening a pin
+uses fresh authorized browsing, not an offline playlist copy. Signing out hides
+that account's pins without deleting them; unreadable pin files are preserved.
+
 ## Full album loading (v0.17.0)
 
 Album pages offer **Load all album tracks** and **Stop loading**, reading at most

@@ -1,9 +1,9 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.17.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.17.0 (`b3c3c154e362`); managed pin `45cda2c`.
-Operator resumed the roadmap after reboot; the coordinated hold is released.
-Approved: v0.18.0 playlist name/description editing; publication/deployment in progress.
+**Status: v0.18.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.18.0 (`9b6c4299aafb`); published managed pin `7e44230`
+(installed from equivalent local pin `c80f0e6`).
+Approved: v0.19.0 local playlist pins; publication/deployment in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -28,6 +28,25 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3j slice (v0.19.0)
+
+**Pin locally / Unpin locally** adds account-scoped playlist shortcuts on this
+device. Pins appear above the original folder tree and in Library → Playlists &
+folders, including compact windows. Visible pin menus move shortcuts up/down or
+remove them without changing TIDAL favorites, folder order, queue or playback.
+Opening a shortcut fetches the playlist normally with current authorization.
+
+Up to 64 playlist IDs and last-known labels are stored per account, using private
+atomic files and bounded, versioned reads. Newer loaded labels/artwork are preferred
+when available. Unknown, malformed or oversized files disable writes until reloaded;
+failed saves require reload rather than overwriting unknown state. Signing out clears
+the in-memory account view without deleting that account's local pins.
+
+Synthetic tests cover private round trips, ordering, account isolation, limits,
+malformed-file preservation and real menu clicks without remote requests. No live
+account writes or device/audio tests. Persistent browse caches, remote reorder,
+delete/unfollow and capability-gated folder/cover operations remain separate work.
 
 ## Approved P3i slice (v0.18.0)
 
