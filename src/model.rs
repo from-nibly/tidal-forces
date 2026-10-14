@@ -50,6 +50,8 @@ pub struct Playlist {
     pub uuid: String,
     pub title: String,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub image: Option<String>,
     #[serde(default)]
     pub square_image: Option<String>,

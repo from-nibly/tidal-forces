@@ -30,6 +30,101 @@ pub(super) fn step(method: &'static str, path: &'static str, body: Value) -> Ste
 fn metadata() -> Value {
     json!({"uuid":"test-list", "title":"Test", "type":"USER", "numberOfTracks":3,"numberOfVideos":1,"creator":{"id":7}})
 }
+#[tokio::test]
+async fn metadata_edit_is_revision_guarded_and_verified_including_empty_description() {
+    let mut before = metadata();
+    before["description"] = json!("Old");
+    let mut after = before.clone();
+    after["title"] = json!("Rock & roll");
+    after["description"] = json!("");
+    let mut write = step("POST", "/v1/playlists/test-list", json!({}));
+    write.contains = vec![
+        "if-none-match: \"revision-1\"",
+        "title=Rock+%26+roll",
+        "description=",
+    ];
+    write.etag = "\"revision-2\"";
+    let mut verify = step("GET", "/v1/playlists/test-list", after);
+    verify.etag = "\"revision-2\"";
+    let (mut api, server) = mock(vec![
+        step("GET", "/v1/playlists/test-list", before),
+        write,
+        verify,
+    ]);
+    let saved = api
+        .edit_playlist_metadata(7, "test-list", "\"revision-1\"", "Rock & roll", "")
+        .await
+        .unwrap();
+    assert_eq!(saved.title, "Rock & roll");
+    assert_eq!(saved.description.as_deref(), Some(""));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn metadata_edit_refuses_stale_foreign_or_unknown_metadata_before_writing() {
+    for case in 0..3 {
+        let mut before = metadata();
+        before["description"] = json!("Old");
+        if case == 1 {
+            before["creator"]["id"] = json!(8);
+        }
+        if case == 2 {
+            before.as_object_mut().unwrap().remove("description");
+        }
+        let (mut api, server) = mock(vec![step("GET", "/v1/playlists/test-list", before)]);
+        let revision = if case == 0 { "stale" } else { "\"revision-1\"" };
+        assert!(
+            api.edit_playlist_metadata(7, "test-list", revision, "New", "")
+                .await
+                .is_err()
+        );
+        server.join().unwrap();
+    }
+    let (mut api, server) = mock(vec![]);
+    assert!(
+        api.edit_playlist_metadata(8, "test-list", "x", "New", "")
+            .await
+            .is_err()
+    );
+    assert!(
+        api.edit_playlist_metadata(7, "test-list", "x", " ", "")
+            .await
+            .is_err()
+    );
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn metadata_edit_does_not_retry_ambiguous_writes_or_accept_unverified_results() {
+    for case in 0..4 {
+        let mut before = metadata();
+        before["description"] = json!("");
+        let mut write = step("POST", "/v1/playlists/test-list", json!({}));
+        if case == 0 {
+            write.status = 500;
+        }
+        if case == 1 {
+            write.etag = "";
+        } else if case == 2 {
+            write.etag = "\"revision-2\"";
+        }
+        let mut steps = vec![
+            step("GET", "/v1/playlists/test-list", before.clone()),
+            write,
+        ];
+        if case == 2 {
+            steps.push(step("GET", "/v1/playlists/test-list", before));
+        }
+        let (mut api, server) = mock(steps);
+        assert!(
+            api.edit_playlist_metadata(7, "test-list", "\"revision-1\"", "New", "")
+                .await
+                .is_err()
+        );
+        server.join().unwrap();
+    }
+}
+
 fn track(id: u64) -> Value {
     json!({"type":"track","item":{"id":id,"title":"Synthetic metadata"}})
 }

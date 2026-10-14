@@ -25,6 +25,7 @@ mod library_load;
 pub(crate) mod navigation;
 mod playback;
 mod playlist_load;
+mod playlist_metadata;
 mod side_panel;
 use playback::RestoreGuard;
 mod settings;
@@ -63,6 +64,8 @@ pub struct App {
     instance: Option<Instance>,
     pending_link: Option<Link>,
     playlist_page: Option<PlaylistPage>,
+    metadata_editor: Option<playlist_metadata::Editor>,
+    metadata_serial: u64,
     playlist_dialog: bool,
     playlist_target: Option<Track>,
     owned_playlists: Vec<Playlist>,
@@ -187,6 +190,8 @@ impl App {
             instance: None,
             pending_link: None,
             playlist_page: None,
+            metadata_editor: None,
+            metadata_serial: 0,
             playlist_dialog: false,
             playlist_target: None,
             owned_playlists: Vec::new(),
@@ -279,6 +284,7 @@ impl App {
         if matches!(
             &r,
             Request::SetFavorite { .. }
+                | Request::EditPlaylistMetadata { .. }
                 | Request::CreatePlaylist { .. }
                 | Request::AddToPlaylist { .. }
                 | Request::RemoveFromPlaylist { .. }
@@ -672,6 +678,12 @@ impl App {
                         });
                     }
                 }
+                Event::PlaylistMetadataEdited {
+                    user,
+                    operation,
+                    id,
+                    result,
+                } => self.metadata_result(user, operation, id, result),
                 Event::PlaylistEdited { id, message } => {
                     self.invalidate_browse_cache();
                     self.playlist_busy = false;
@@ -2093,6 +2105,7 @@ impl App {
                 ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(MUTED));
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
+                if self.playlist_page.as_ref().is_some_and(|p|p.editable && p.playlist.description.is_some()) && ui.add_enabled(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none(),egui::Button::new("Edit details…")).clicked() {self.open_metadata_editor();}
                 if let Some(page) = &self.playlist_page {
                     ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
                 }
@@ -2687,6 +2700,7 @@ impl eframe::App for App {
             });
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
+        self.metadata_window(ctx);
         self.export_window(ctx);
         self.handle_track_paste(ctx);
         self.prefetch_context();

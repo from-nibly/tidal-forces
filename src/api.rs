@@ -957,6 +957,68 @@ impl Api {
         Ok(page.etag)
     }
 
+    pub async fn edit_playlist_metadata(
+        &mut self,
+        user: u64,
+        id: &str,
+        expected: &str,
+        title: &str,
+        description: &str,
+    ) -> Result<Playlist> {
+        anyhow::ensure!(
+            user != 0 && self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "The playlist account changed"
+        );
+        anyhow::ensure!(
+            !title.trim().is_empty() && title.chars().count() <= 100,
+            "Use a playlist name of 1–100 characters"
+        );
+        anyhow::ensure!(
+            description.chars().count() <= 1000,
+            "Use a description of at most 1,000 characters"
+        );
+        let (before, revision) = self.playlist_metadata(id).await?;
+        ensure_revision(expected, &revision)?;
+        anyhow::ensure!(
+            before.uuid == id && self.owns(&before),
+            "Only your own playlists can be edited"
+        );
+        anyhow::ensure!(
+            before.description.is_some(),
+            "TIDAL did not supply the playlist description. Refresh before editing."
+        );
+        if before.title == title && before.description.as_deref() == Some(description) {
+            return Ok(before);
+        }
+        let response = self
+            .request(
+                Method::POST,
+                "v1",
+                &format!("playlists/{id}"),
+                &[],
+                &[("title", title), ("description", description)],
+                Some(&revision),
+            )
+            .await?;
+        let written = response.headers().get("etag").and_then(|h| h.to_str().ok()).filter(|h| !h.trim().is_empty()).context("TIDAL did not confirm a write revision. The edit may have completed; refresh before retrying.")?.to_owned();
+        anyhow::ensure!(
+            written != revision,
+            "TIDAL did not confirm a new metadata revision. The edit may have completed; refresh before retrying."
+        );
+        let (after, observed) = self.playlist_metadata(id).await.context(
+            "The edit may have completed, but verification failed. Refresh before retrying.",
+        )?;
+        anyhow::ensure!(
+            observed == written
+                && after.uuid == id
+                && self.owns(&after)
+                && after.title == title
+                && after.description.as_deref() == Some(description),
+            "The edit could not be verified. Refresh and inspect the playlist before retrying."
+        );
+        Ok(after)
+    }
+
     pub async fn add_to_playlist(&mut self, id: &str, track: u64) -> Result<bool> {
         let (playlist, etag) = self.playlist_metadata(id).await?;
         anyhow::ensure!(

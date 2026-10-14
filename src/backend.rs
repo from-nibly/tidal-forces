@@ -103,6 +103,14 @@ pub enum Request {
         etag: Option<String>,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
+    EditPlaylistMetadata {
+        user: u64,
+        operation: u64,
+        id: String,
+        etag: String,
+        title: String,
+        description: String,
+    },
     CreatePlaylist {
         title: String,
         description: String,
@@ -176,6 +184,12 @@ pub enum Event {
         result: Result<String, String>,
     },
     PlaylistCreated(Playlist),
+    PlaylistMetadataEdited {
+        user: u64,
+        operation: u64,
+        id: String,
+        result: Result<Playlist, String>,
+    },
     PlaylistEdited {
         id: String,
         message: String,
@@ -427,6 +441,10 @@ impl Backend {
                                     Request::AppendQueueBatch { user, operation, id, tracks, offset, etag, cancelled } => {
                                         let result = api.append_queue_batch(user, &id, &tracks, offset, etag.as_deref(), &cancelled).await.map_err(|error| error.to_string());
                                         events.send(Event::QueueBatchSaved { user, operation, offset, result });
+                                    }
+                                    Request::EditPlaylistMetadata { user, operation, id, etag, title, description } => {
+                                        let result=api.edit_playlist_metadata(user,&id,&etag,&title,&description).await.map_err(|e|e.to_string());
+                                        events.send(Event::PlaylistMetadataEdited {user,operation,id,result});
                                     }
                                     Request::CreatePlaylist { title, description } => events.send(Event::PlaylistCreated(api.create_playlist(&title, &description).await?)),
                                     Request::AddToPlaylist { id, track } => {

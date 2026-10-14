@@ -23,7 +23,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "library-albums",
             "library-selected",
             "album-load",
-            "album-loading"
+            "album-loading",
+            "metadata"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -242,12 +243,13 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     if matches!(
         page,
-        "collection" | "selection" | "view" | "load" | "browse"
+        "collection" | "selection" | "view" | "load" | "browse" | "metadata"
     ) {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
                 uuid: "fixture-0".into(),
                 title: "Night drives".into(),
+                description: Some("Music for the late journey home.".into()),
                 square_image: Some("fixture-0".into()),
                 number_of_tracks: 8,
                 ..Default::default()
@@ -330,6 +332,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.start_library_load();
             app.loading = true;
         }
+    }
+    if page == "metadata" {
+        app.browse_loaded();
+        app.open_metadata_editor();
     }
     if matches!(page, "album-load" | "album-loading") {
         app.album_position = Some(album_load::Position {

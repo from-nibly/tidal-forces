@@ -1,9 +1,9 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.16.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.16.0 (`fcff69b37f96`); managed pin `3022286`.
-Approved: v0.17.0 guarded full album loading; publication/deployment in progress.
-Roadmap paused at operator request after deployment, pending reboot.
+**Status: v0.17.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.17.0 (`b3c3c154e362`); managed pin `45cda2c`.
+Operator resumed the roadmap after reboot; the coordinated hold is released.
+Approved: v0.18.0 playlist name/description editing; publication/deployment in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -28,6 +28,23 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3i slice (v0.18.0)
+
+Owned playlists with known descriptions expose **Edit details…**. Opening the
+editor is read-only; **Save changes** explicitly confirms the account mutation.
+Name/description limits are 100/1,000 characters; an empty description is allowed.
+The operation freezes account, playlist and revision, rechecks ownership/revision,
+sends the existing API's conditional write, requires a new write revision and
+verifies exact metadata at that revision. Uncertain writes/read-back failures
+require Refresh and inspection, never blind retry or rollback. Cached views are
+invalidated before dispatch and on completion; stale-account replies are ignored.
+
+Validation uses synthetic HTTP contracts and UI tests, including stale revision,
+foreign ownership, unknown description, ambiguous writes, missing/unchanged write
+revisions, mismatched read-back, double dispatch and closed worker. Live server
+mutation interoperability remains untested; fixtures do not establish it. Cover,
+visibility, delete/unfollow and track reordering remain separate work.
 
 ## Approved P3h slice (v0.17.0)
 
