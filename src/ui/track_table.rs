@@ -257,6 +257,8 @@ impl App {
         let mut add = None;
         let mut radio = None;
         let mut remove = None;
+        let mut reorder = None;
+        let reorderable = self.can_reorder_playlist();
         let mut favorite = None;
         let removable = !self.loading
             && !self.playlist_busy
@@ -540,6 +542,31 @@ impl App {
             }
             let mut menu = |ui: &mut egui::Ui| {
                 track_menu(ui, t, &mut radio);
+                if removable {
+                    let help = "Reordering requires Original order and a fully loaded owned playlist of 2–100 available tracks, without videos.";
+                    if ui
+                        .add_enabled(
+                            reorderable && i > 0,
+                            egui::Button::new("Move to playlist top"),
+                        )
+                        .on_disabled_hover_text(help)
+                        .clicked()
+                    {
+                        reorder = Some((i, false));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            reorderable && i + 1 < self.tracks.len(),
+                            egui::Button::new("Move to playlist bottom"),
+                        )
+                        .on_disabled_hover_text(help)
+                        .clicked()
+                    {
+                        reorder = Some((i, true));
+                        ui.close();
+                    }
+                }
                 if removable && ui.button("Remove from this playlist…").clicked() {
                     remove = Some(i);
                     ui.close();
@@ -660,6 +687,9 @@ impl App {
         }
         if let Some((item, saved)) = favorite {
             self.set_favorite(item, saved);
+        }
+        if let Some((from, to_end)) = reorder {
+            self.open_reorder(from, to_end);
         }
         if let Some(i) = remove
             && let Some(page) = &self.playlist_page

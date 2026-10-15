@@ -957,6 +957,41 @@ impl Api {
         Ok(page.etag)
     }
 
+    pub async fn reorder_playlist(&mut self, change: &crate::reorder::Move) -> Result<()> {
+        let expected = change.after()?;
+        anyhow::ensure!(
+            self.session
+                .as_ref()
+                .is_some_and(|s| s.user_id == change.user),
+            "The playlist account changed"
+        );
+        let before = self
+            .playlist_page(&change.id, 0, Some(&change.etag))
+            .await?;
+        anyhow::ensure!(
+            change.matches(&before, &change.ids),
+            "The playlist changed or contains unavailable entries. Refresh before reordering."
+        );
+        let target = if change.to_end { change.ids.len() } else { 0 };
+        let response = self
+            .request(
+                Method::POST,
+                "v1",
+                &format!("playlists/{}/items/{}", change.id, change.from),
+                &[],
+                &[("toIndex", &target.to_string())],
+                Some(&change.etag),
+            )
+            .await?;
+        let written=response.headers().get("etag").and_then(|h|h.to_str().ok()).filter(|h|!h.trim().is_empty() && *h!=change.etag).context("The move may have completed, but no new revision was confirmed. Refresh and inspect before retrying.")?.to_owned();
+        let after=self.playlist_page(&change.id,0,Some(&written)).await.context("The move may have completed, but verification failed. Refresh and inspect before retrying.")?;
+        anyhow::ensure!(
+            change.matches(&after, &expected),
+            "The reordered playlist could not be verified. Refresh and inspect before retrying."
+        );
+        Ok(())
+    }
+
     pub async fn edit_playlist_metadata(
         &mut self,
         user: u64,
@@ -1121,6 +1156,9 @@ mod favorite_tests;
 #[cfg(test)]
 #[path = "playlist_tests.rs"]
 mod playlist_tests;
+#[cfg(test)]
+#[path = "reorder_tests.rs"]
+mod reorder_tests;
 
 fn validate_collection(kind: &str, id: &str) -> Result<()> {
     anyhow::ensure!(

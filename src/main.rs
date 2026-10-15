@@ -18,6 +18,7 @@ mod model;
 mod pins;
 mod player_state;
 mod queue;
+mod reorder;
 mod store;
 mod ui;
 mod visualizer;

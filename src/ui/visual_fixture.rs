@@ -26,7 +26,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "album-loading",
             "metadata",
             "pins",
-            "pins-library"
+            "pins-library",
+            "reorder"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -245,7 +246,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     if matches!(
         page,
-        "collection" | "selection" | "view" | "load" | "browse" | "metadata" | "pins"
+        "collection" | "selection" | "view" | "load" | "browse" | "metadata" | "pins" | "reorder"
     ) {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
@@ -341,6 +342,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         pins.toggle("fixture-0", "Night drives").unwrap();
         pins.toggle("fixture-2", "Late hours").unwrap();
         app.pins = Some(pins);
+    }
+    if page == "reorder" {
+        app.browse_loaded();
+        app.open_reorder(3, false);
     }
     if page == "metadata" {
         app.browse_loaded();

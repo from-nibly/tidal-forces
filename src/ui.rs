@@ -27,6 +27,7 @@ mod pins;
 mod playback;
 mod playlist_load;
 mod playlist_metadata;
+mod reorder;
 mod side_panel;
 use playback::RestoreGuard;
 mod settings;
@@ -67,6 +68,8 @@ pub struct App {
     playlist_page: Option<PlaylistPage>,
     metadata_editor: Option<playlist_metadata::Editor>,
     metadata_serial: u64,
+    reorder_dialog: Option<reorder::Dialog>,
+    reorder_serial: u64,
     pins: Option<crate::pins::Pins>,
     pins_error: Option<String>,
     pins_root: Option<std::path::PathBuf>,
@@ -197,6 +200,8 @@ impl App {
             playlist_page: None,
             metadata_editor: None,
             metadata_serial: 0,
+            reorder_dialog: None,
+            reorder_serial: 0,
             pins: None,
             pins_error: None,
             pins_root: None,
@@ -293,6 +298,7 @@ impl App {
             &r,
             Request::SetFavorite { .. }
                 | Request::EditPlaylistMetadata { .. }
+                | Request::ReorderPlaylist { .. }
                 | Request::CreatePlaylist { .. }
                 | Request::AddToPlaylist { .. }
                 | Request::RemoveFromPlaylist { .. }
@@ -687,6 +693,12 @@ impl App {
                         });
                     }
                 }
+                Event::PlaylistReordered {
+                    user,
+                    operation,
+                    id,
+                    result,
+                } => self.reorder_result(user, operation, id, result),
                 Event::PlaylistMetadataEdited {
                     user,
                     operation,
@@ -2118,7 +2130,7 @@ impl App {
                 ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(MUTED));
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
-                if self.playlist_page.as_ref().is_some_and(|p|p.editable && p.playlist.description.is_some()) && ui.add_enabled(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none(),egui::Button::new("Edit details…")).clicked() {self.open_metadata_editor();}
+                if self.playlist_page.as_ref().is_some_and(|p|p.editable && p.playlist.description.is_some()) && ui.add_enabled(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none() && self.reorder_dialog.is_none(),egui::Button::new("Edit details…")).clicked() {self.open_metadata_editor();}
                 self.pin_control(ui);
                 if let Some(page) = &self.playlist_page {
                     ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
@@ -2716,6 +2728,7 @@ impl eframe::App for App {
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
         self.metadata_window(ctx);
+        self.reorder_window(ctx);
         self.export_window(ctx);
         self.handle_track_paste(ctx);
         self.prefetch_context();

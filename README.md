@@ -216,6 +216,19 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Playlist reordering (v0.20.0)
+
+A track's menu offers **Move to playlist top / bottom**. Selecting an action
+moves the track immediately, without an extra confirmation. This
+initial slice supports fully loaded, owned playlists of 2–100 available tracks,
+without videos, in Original order with no filter/reverse applied. Larger playlists
+and middle-position/drag moves remain future work.
+
+Moves target the selected raw occurrence, including duplicate songs, and verify
+the complete source and resulting order at pinned revisions. Uncertain results
+require Refresh and inspection, not blind retry. This changes the TIDAL playlist,
+not your existing playback queue. Live mutation interoperability is untested.
+
 ## Local playlist pins (v0.19.0)
 
 Use **Pin locally** on a loaded playlist to keep a shortcut on this device. Pins

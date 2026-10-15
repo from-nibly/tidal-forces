@@ -6,7 +6,7 @@ const MAX_ROWS: usize = 50_000;
 
 #[derive(Default)]
 pub(super) struct Cache {
-    owner: Option<u64>,
+    pub(super) owner: Option<u64>,
     entries: VecDeque<Snapshot>,
     pub ready: bool,
     pub restored: bool,

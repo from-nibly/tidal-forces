@@ -1,9 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.18.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.18.0 (`9b6c4299aafb`); published managed pin `7e44230`
-(installed from equivalent local pin `c80f0e6`).
-Approved: v0.19.0 local playlist pins; publication/deployment in progress.
+**Status: v0.19.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.19.0 (`363312a3e8ed`); published managed pin `1f9a6f8`
+(installed from equivalent local pin `0c13a46`).
+Approved: v0.20.0 bounded playlist reordering with immediate menu actions;
+publication/deployment in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -28,6 +29,27 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3k slice (v0.20.0)
+
+Track menus offer **Move to playlist top / bottom**. Selecting an action dispatches
+immediately, without an extra confirmation (operator review feedback).
+This initial slice requires Original order, a fully loaded owned playlist of
+2–100 available tracks, and no videos or unavailable/raw holes. Larger playlists
+need a separate paged verification controller rather than a long blocking scan.
+Middle-position moves and drag/drop remain separate work.
+
+Freeze account, revision, complete ordered IDs and the raw source position—never
+find a duplicate by track ID. Recheck the entire source before one conditional
+write, require a new write revision and verify the exact resulting order against
+it. Stale scope, ownership/count/position changes, ambiguous writes or mismatched
+read-back stop safely and require Refresh/inspection, never blind retry/rollback.
+The existing playback queue remains unchanged; only the remote playlist is edited.
+
+Synthetic tests cover duplicate occurrences, endpoint boundaries, stale revisions,
+foreign accounts/ownership, video/unavailable rows, altered order, uncertain writes,
+single-click dispatch, duplicate dispatch prevention and backpressure. Live mutation interoperability remains untested;
+release approval does not authorize agent-run live mutation tests.
 
 ## Approved P3j slice (v0.19.0)
 
