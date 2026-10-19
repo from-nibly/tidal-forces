@@ -1,10 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.21.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.21.0 (`5897ff4db785`); published managed pin `09606f7`.
-Scoped installation used deployed-source commit `33a695f` on the verified prior
-baseline, not unrelated reconciled Home Manager master changes.
-Approved: v0.22.0 paged playlist reorder verification; publication/install in progress.
+**Status: v0.22.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.22.0 (`6bccfb416c57`); published managed pin `8397b65`.
+Scoped installation used deployed-source commit `58a26f7` on the verified prior
+baseline, preserving SMAD v0.5 without deploying unrelated reconciled master changes.
+Approved: v0.23.0 guarded owned-playlist deletion; publication/install in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +29,23 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3n slice (v0.23.0)
+
+Owned playlist deletion is separate from unfollowing. The playlist header's
+**Playlist…** menu groups Edit details and Delete playlist; deletion freezes the
+account, playlist and revision and requires typing **DELETE** plus an explicit
+button click. This removes the entire playlist, not just loaded/filtered tracks.
+
+The backend checks current ownership/revision, sends one conditional DELETE and
+requires a 404 from that exact playlist resource after a successful response.
+Permission, refresh, rate-limit and transport failures are never treated as absence.
+Queued work is cancellable on navigation/account/close; an uncertain result must
+be inspected, never automatically retried or rolled back. Verified deletion clears
+stale browse data and returns to the library. Queue entries and local pins remain;
+continuation from a deleted playlist can fail. Unfollow and folder deletion remain
+separate capabilities. Only synthetic contracts are tested; live endpoint/revision
+interoperability remains unproven and no real-account mutations are authorized.
 
 ## Approved P3m slice (v0.22.0)
 

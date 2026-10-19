@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Owned-playlist deletion (v0.23.0)
+
+**Playlist… → Delete playlist…** is available on your own playlists. Type
+**DELETE** and click the destructive button to remove the entire playlist—not
+just the currently loaded or filtered tracks. This is separate from unfollowing.
+
+Ownership/revision checks precede one conditional deletion and an exact-resource
+absence check. An uncertain result requires Refresh and inspection, never automatic
+retry. Queued tracks and local pins stay; further loading from that playlist can
+fail. Live mutation interoperability has not been tested.
+
 ## Paged playlist reordering (v0.22.0)
 
 Reordering supports fully loaded owned playlists of up to 50,000 available tracks.

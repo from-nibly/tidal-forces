@@ -46,6 +46,7 @@ impl App {
             || self.track_view.active()
             || self.playlist_busy
             || self.metadata_editor.is_some()
+            || self.delete_dialog.is_some()
             || !(2..=MAX_TRACKS).contains(&count)
             || !page.editable
             || page.more

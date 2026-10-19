@@ -254,6 +254,11 @@ impl Api {
         form: &[(&str, &str)],
         revision: Option<&str>,
     ) -> Result<Response> {
+        let request_user = self
+            .session
+            .as_ref()
+            .context("Sign in to TIDAL first")?
+            .user_id;
         if self
             .session
             .as_ref()
@@ -272,6 +277,7 @@ impl Api {
         };
         for attempt in 0..2 {
             let s = self.session.as_ref().context("Sign in to TIDAL first")?;
+            ensure_request_user(request_user, s.user_id)?;
             let mut request = self
                 .client
                 .request(method.clone(), format!("{}/{version}/{path}", self.base))
@@ -310,6 +316,12 @@ impl Api {
                 bail!(
                     "Could not confirm the change with TIDAL. It may have completed; refresh before retrying."
                 );
+            }
+            if r.status() == StatusCode::NOT_FOUND {
+                return Err(RequestNotFound {
+                    path: path.to_owned(),
+                }
+                .into());
             }
             return check_for(r, phase).await;
         }
@@ -1087,6 +1099,54 @@ impl Api {
         response.headers().get("etag").and_then(|h|h.to_str().ok()).filter(|h|!h.trim().is_empty() && *h!=change.etag).map(str::to_owned).context("The move may have completed, but no new revision was confirmed. Refresh and inspect before retrying.")
     }
 
+    pub async fn delete_playlist(
+        &mut self,
+        user: u64,
+        id: &str,
+        etag: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            user != 0 && self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "The playlist account changed"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist deletion cancelled before writing"
+        );
+        let (playlist, revision) = self.playlist_metadata(id).await?;
+        ensure_revision(etag, &revision)?;
+        anyhow::ensure!(
+            self.session.as_ref().is_some_and(|s| s.user_id == user)
+                && playlist.uuid == id
+                && self.owns(&playlist),
+            "Only your own playlists can be deleted"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist deletion cancelled before writing"
+        );
+        let path = format!("playlists/{id}");
+        self.request(Method::DELETE, "v1", &path, &[], &[], Some(etag))
+            .await?;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Deletion may have completed. Refresh and inspect before trying again."
+        );
+        match self.request(Method::GET, "v1", &path, &[], &[], None).await {
+            Err(error)
+                if error
+                    .downcast_ref::<RequestNotFound>()
+                    .is_some_and(|e| e.path == path) =>
+            {
+                Ok(())
+            }
+            _ => bail!(
+                "Deletion could not be verified. It may have completed; refresh and inspect before trying again."
+            ),
+        }
+    }
+
     pub async fn edit_playlist_metadata(
         &mut self,
         user: u64,
@@ -1248,6 +1308,9 @@ mod export_tests;
 #[cfg(test)]
 #[path = "favorite_tests.rs"]
 mod favorite_tests;
+#[cfg(test)]
+#[path = "playlist_delete_tests.rs"]
+mod playlist_delete_tests;
 #[cfg(test)]
 #[path = "playlist_tests.rs"]
 mod playlist_tests;
@@ -1492,6 +1555,31 @@ async fn rejection_value(r: &mut Response) -> Value {
         }
     }
 }
+
+fn ensure_request_user(expected: u64, observed: u64) -> Result<()> {
+    anyhow::ensure!(
+        expected == 0 || observed == expected,
+        "The TIDAL account changed during renewal. Sign in again before continuing."
+    );
+    Ok(())
+}
+
+// Keep the failing resource internally so a missing refresh/session endpoint cannot
+// masquerade as a deleted playlist. Display never includes the resource identity.
+struct RequestNotFound {
+    path: String,
+}
+impl std::fmt::Display for RequestNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TIDAL request failed (HTTP 404 Not Found). Please retry.")
+    }
+}
+impl std::fmt::Debug for RequestNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+impl std::error::Error for RequestNotFound {}
 
 async fn check_for(mut r: Response, phase: &'static str) -> Result<Response> {
     match r.status() {

@@ -113,6 +113,13 @@ pub enum Request {
         change: crate::reorder::Move,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
+    DeletePlaylist {
+        user: u64,
+        operation: u64,
+        id: String,
+        etag: String,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     EditPlaylistMetadata {
         user: u64,
         operation: u64,
@@ -204,6 +211,12 @@ pub enum Event {
         operation: u64,
         id: String,
         result: Result<String, String>,
+    },
+    PlaylistDeleted {
+        user: u64,
+        operation: u64,
+        id: String,
+        result: Result<(), String>,
     },
     PlaylistMetadataEdited {
         user: u64,
@@ -470,6 +483,10 @@ impl Backend {
                                     Request::ReorderPlaylist {operation,change,cancelled} => {
                                         let result=api.write_reorder(&change,&cancelled).await.map_err(|e|e.to_string());
                                         events.send(Event::PlaylistReordered {user:change.user,operation,id:change.id,result});
+                                    }
+                                    Request::DeletePlaylist { user, operation, id, etag, cancelled } => {
+                                        let result = api.delete_playlist(user, &id, &etag, &cancelled).await.map_err(|e| e.to_string());
+                                        events.send(Event::PlaylistDeleted { user, operation, id, result });
                                     }
                                     Request::EditPlaylistMetadata { user, operation, id, etag, title, description } => {
                                         let result=api.edit_playlist_metadata(user,&id,&etag,&title,&description).await.map_err(|e|e.to_string());

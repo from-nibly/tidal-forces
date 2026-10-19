@@ -33,6 +33,7 @@ impl App {
             || !page.editable
             || self.metadata_editor.is_some()
             || self.reorder_dialog.is_some()
+            || self.delete_dialog.is_some()
             || !matches!(&self.page,Page::Collection{kind,id,..} if kind=="playlists" && id==&page.playlist.uuid)
         {
             return;

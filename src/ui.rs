@@ -25,6 +25,7 @@ mod library_load;
 pub(crate) mod navigation;
 mod pins;
 mod playback;
+mod playlist_delete;
 mod playlist_load;
 mod playlist_metadata;
 mod reorder;
@@ -68,6 +69,8 @@ pub struct App {
     playlist_page: Option<PlaylistPage>,
     metadata_editor: Option<playlist_metadata::Editor>,
     metadata_serial: u64,
+    delete_dialog: Option<playlist_delete::Dialog>,
+    delete_serial: u64,
     reorder_dialog: Option<reorder::Dialog>,
     reorder_serial: u64,
     pins: Option<crate::pins::Pins>,
@@ -200,6 +203,8 @@ impl App {
             playlist_page: None,
             metadata_editor: None,
             metadata_serial: 0,
+            delete_dialog: None,
+            delete_serial: 0,
             reorder_dialog: None,
             reorder_serial: 0,
             pins: None,
@@ -299,6 +304,7 @@ impl App {
             Request::SetFavorite { .. }
                 | Request::EditPlaylistMetadata { .. }
                 | Request::ReorderPlaylist { .. }
+                | Request::DeletePlaylist { .. }
                 | Request::CreatePlaylist { .. }
                 | Request::AddToPlaylist { .. }
                 | Request::RemoveFromPlaylist { .. }
@@ -401,6 +407,7 @@ impl App {
     }
 
     fn show_location(&mut self, location: Location, autoplay: bool) {
+        self.cancel_delete_playlist();
         self.cancel_reorder();
         self.save_browse_view();
         let target = location.clone();
@@ -457,6 +464,7 @@ impl App {
 
     fn load_page(&mut self, offset: usize) {
         if offset == 0 {
+            self.cancel_delete_playlist();
             self.cancel_reorder();
         }
         if offset == 0 {
@@ -525,6 +533,7 @@ impl App {
         }
         self.credentials.busy = true;
         self.credentials.confirm = false;
+        self.cancel_delete_playlist();
         self.cancel_reorder();
         self.cancel_export(true);
         self.history_account_changed();
@@ -698,6 +707,12 @@ impl App {
                         });
                     }
                 }
+                Event::PlaylistDeleted {
+                    user,
+                    operation,
+                    id,
+                    result,
+                } => self.playlist_deleted(user, operation, id, result),
                 Event::ReorderChecked {
                     operation,
                     check,
@@ -754,6 +769,7 @@ impl App {
                 Event::Session(account) => {
                     let account_changed = self.account != account.as_ref().map(|(user, _)| *user);
                     if account_changed {
+                        self.cancel_delete_playlist();
                         self.cancel_reorder();
                         self.cancel_export(true);
                         self.credentials.confirm = false;
@@ -2141,7 +2157,15 @@ impl App {
                 ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(MUTED));
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
-                if self.playlist_page.as_ref().is_some_and(|p|p.editable && p.playlist.description.is_some()) && ui.add_enabled(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none() && self.reorder_dialog.is_none(),egui::Button::new("Edit details…")).clicked() {self.open_metadata_editor();}
+                if self.playlist_page.as_ref().is_some_and(|p|p.editable) {
+                    ui.add_enabled_ui(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none() && self.reorder_dialog.is_none() && self.delete_dialog.is_none(), |ui| {
+                        ui.menu_button("Playlist…", |ui| {
+                            if ui.add_enabled(self.playlist_page.as_ref().is_some_and(|p|p.playlist.description.is_some()), egui::Button::new("Edit details…")).clicked() { ui.close(); self.open_metadata_editor(); }
+                            ui.separator();
+                            if ui.button(egui::RichText::new("Delete playlist…").color(Color32::LIGHT_RED)).clicked() { ui.close(); self.open_delete_playlist(); }
+                        });
+                    });
+                }
                 self.pin_control(ui);
                 if let Some(page) = &self.playlist_page {
                     ui.label(RichText::new(if page.editable { "Owned" } else { "Read-only" }).size(12.).color(MUTED));
@@ -2676,6 +2700,7 @@ impl eframe::App for App {
         self.desktop_events(ctx);
         self.credential_close_guard(ctx);
         if ctx.input(|input| input.viewport().close_requested()) {
+            self.cancel_delete_playlist();
             self.cancel_reorder();
             self.cancel_export(false);
             self.playlist_load = None;
@@ -2740,6 +2765,7 @@ impl eframe::App for App {
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
         self.metadata_window(ctx);
+        self.delete_playlist_window(ctx);
         self.reorder_window(ctx);
         self.export_window(ctx);
         self.handle_track_paste(ctx);

@@ -25,6 +25,7 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "album-load",
             "album-loading",
             "metadata",
+            "delete",
             "pins",
             "pins-library",
             "reorder",
@@ -253,6 +254,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             | "load"
             | "browse"
             | "metadata"
+            | "delete"
             | "pins"
             | "reorder"
             | "reorder-large"
@@ -369,6 +371,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     if page == "metadata" {
         app.browse_loaded();
         app.open_metadata_editor();
+    }
+    if page == "delete" {
+        app.browse_loaded();
+        app.open_delete_playlist();
     }
     if matches!(page, "album-load" | "album-loading") {
         app.album_position = Some(album_load::Position {
