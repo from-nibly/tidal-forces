@@ -1,10 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.22.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.22.0 (`6bccfb416c57`); published managed pin `8397b65`.
-Scoped installation used deployed-source commit `58a26f7` on the verified prior
-baseline, preserving SMAD v0.5 without deploying unrelated reconciled master changes.
-Approved: v0.23.0 guarded owned-playlist deletion; publication/install in progress.
+**Status: v0.23.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.23.0 (`30aa022db203`); published managed pin `44de077`.
+Scoped installation used deployed-source commit `3ba5ee3` on the verified prior
+baseline, preserving SMAD v0.5.1 without deploying unrelated reconciled master changes.
+Approved: v0.24.0 distinct saved-playlist unfollowing; publication/install in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +29,24 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3o slice (v0.24.0)
+
+**Playlist… → Unfollow playlist…** is distinct from deleting an owned playlist.
+It appears only for a known non-owned playlist positively present in the current
+account's loaded library data; unknown membership is never labeled not saved.
+Explicit confirmation freezes account, ID and metadata revision. A fresh ownership/
+revision preflight precedes one v2 removal request containing only a playlist TRN,
+never a folder TRN or the owned-playlist DELETE endpoint.
+
+Verification uses one bounded response from the account's complete playlist/favorite
+listing. Only a complete, unique response of at most 50 entries establishes absence;
+large, overlapping, malformed, partial or failed reads remain **unverified**, not
+false membership. The membership endpoint has no assumed revision guard. Unverified
+outcomes require Refresh/inspection and never automatic retry. Verified removal
+keeps the current playlist view, queue and local pins. Navigation/account/close
+cancel queued work; owners' playlists cannot be deleted through this action.
+Synthetic contracts do not prove live v2 endpoint or listing interoperability.
 
 ## Approved P3n slice (v0.23.0)
 

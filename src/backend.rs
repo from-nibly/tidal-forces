@@ -113,6 +113,13 @@ pub enum Request {
         change: crate::reorder::Move,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
+    UnfollowPlaylist {
+        user: u64,
+        operation: u64,
+        id: String,
+        etag: String,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     DeletePlaylist {
         user: u64,
         operation: u64,
@@ -211,6 +218,12 @@ pub enum Event {
         operation: u64,
         id: String,
         result: Result<String, String>,
+    },
+    PlaylistUnfollowed {
+        user: u64,
+        operation: u64,
+        id: String,
+        result: Result<crate::api::UnfollowVerification, String>,
     },
     PlaylistDeleted {
         user: u64,
@@ -483,6 +496,10 @@ impl Backend {
                                     Request::ReorderPlaylist {operation,change,cancelled} => {
                                         let result=api.write_reorder(&change,&cancelled).await.map_err(|e|e.to_string());
                                         events.send(Event::PlaylistReordered {user:change.user,operation,id:change.id,result});
+                                    }
+                                    Request::UnfollowPlaylist { user, operation, id, etag, cancelled } => {
+                                        let result = api.unfollow_playlist(user, &id, &etag, &cancelled).await.map_err(|e| e.to_string());
+                                        events.send(Event::PlaylistUnfollowed { user, operation, id, result });
                                     }
                                     Request::DeletePlaylist { user, operation, id, etag, cancelled } => {
                                         let result = api.delete_playlist(user, &id, &etag, &cancelled).await.map_err(|e| e.to_string());

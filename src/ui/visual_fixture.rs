@@ -26,6 +26,7 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "album-loading",
             "metadata",
             "delete",
+            "unfollow",
             "pins",
             "pins-library",
             "reorder",
@@ -255,6 +256,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             | "browse"
             | "metadata"
             | "delete"
+            | "unfollow"
             | "pins"
             | "reorder"
             | "reorder-large"
@@ -375,6 +377,19 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     if page == "delete" {
         app.browse_loaded();
         app.open_delete_playlist();
+    }
+    if page == "unfollow" {
+        if let Some(playlist) = &mut app.playlist_page {
+            playlist.editable = false;
+            playlist.playlist.kind = "USER".into();
+            playlist.playlist.creator = Some(crate::model::PlaylistCreator { id: 8 });
+            app.folders.insert(
+                "root".into(),
+                vec![LibraryEntry::Playlist(playlist.playlist.clone())],
+            );
+        }
+        app.browse_loaded();
+        app.open_unfollow_playlist();
     }
     if matches!(page, "album-load" | "album-loading") {
         app.album_position = Some(album_load::Position {

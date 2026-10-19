@@ -1099,6 +1099,71 @@ impl Api {
         response.headers().get("etag").and_then(|h|h.to_str().ok()).filter(|h|!h.trim().is_empty() && *h!=change.etag).map(str::to_owned).context("The move may have completed, but no new revision was confirmed. Refresh and inspect before retrying.")
     }
 
+    pub async fn unfollow_playlist(
+        &mut self,
+        user: u64,
+        id: &str,
+        etag: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<UnfollowVerification> {
+        anyhow::ensure!(
+            user != 0 && self.session.as_ref().is_some_and(|s| s.user_id == user),
+            "The playlist account changed"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Unfollow cancelled before writing"
+        );
+        let (playlist, revision) = self.playlist_metadata(id).await?;
+        ensure_revision(etag, &revision)?;
+        anyhow::ensure!(
+            self.session.as_ref().is_some_and(|s| s.user_id == user)
+                && playlist.uuid == id
+                && playlist.is_known_non_owned(user),
+            "Only a known non-owned playlist can be unfollowed"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Unfollow cancelled before writing"
+        );
+        self.request(
+            Method::PUT,
+            "v2",
+            "my-collection/playlists/folders/remove",
+            &[("trns", &format!("trn:playlist:{id}"))],
+            &[],
+            None,
+        )
+        .await?;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Unfollow may have completed. Refresh and inspect before trying again."
+        );
+        // One complete response can establish absence without unstable paginated
+        // negative inference. Larger/partial libraries remain explicitly unknown.
+        let result = self
+            .get(
+                &format!("users/{user}/playlistsAndFavoritePlaylists"),
+                &[("limit", "50"), ("offset", "0")],
+            )
+            .await;
+        if cancelled.load(Ordering::Acquire)
+            || !self.session.as_ref().is_some_and(|s| s.user_id == user)
+        {
+            bail!("Unfollow may have completed. Refresh and inspect before trying again.");
+        }
+        Ok(
+            if result
+                .as_ref()
+                .is_ok_and(|value| complete_playlist_absence(value, id))
+            {
+                UnfollowVerification::Absent
+            } else {
+                UnfollowVerification::Unknown
+            },
+        )
+    }
+
     pub async fn delete_playlist(
         &mut self,
         user: u64,
@@ -1314,6 +1379,9 @@ mod playlist_delete_tests;
 #[cfg(test)]
 #[path = "playlist_tests.rs"]
 mod playlist_tests;
+#[cfg(test)]
+#[path = "playlist_unfollow_tests.rs"]
+mod playlist_unfollow_tests;
 #[cfg(test)]
 #[path = "reorder_tests.rs"]
 mod reorder_tests;
@@ -1554,6 +1622,38 @@ async fn rejection_value(r: &mut Response) -> Value {
             _ => return Value::Null,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnfollowVerification {
+    Absent,
+    Unknown,
+}
+
+fn complete_playlist_absence(value: &Value, id: &str) -> bool {
+    let Some(rows) = value["items"].as_array() else {
+        return false;
+    };
+    if rows.len() > 50
+        || value["totalNumberOfItems"].as_u64() != Some(rows.len() as u64)
+        || value
+            .get("offset")
+            .is_some_and(|offset| offset.as_u64() != Some(0))
+        || value
+            .get("hasMore")
+            .is_some_and(|more| more.as_bool() != Some(false))
+        || value
+            .get("cursor")
+            .is_some_and(|cursor| !cursor.is_null() && cursor.as_str() != Some(""))
+    {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    rows.iter().all(|row| {
+        row["playlist"]["uuid"].as_str().is_some_and(|uuid| {
+            uuid != id && validate_collection("playlists", uuid).is_ok() && seen.insert(uuid)
+        })
+    })
 }
 
 fn ensure_request_user(expected: u64, observed: u64) -> Result<()> {

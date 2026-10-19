@@ -216,6 +216,18 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Unfollowing saved playlists (v0.24.0)
+
+**Playlist… → Unfollow playlist…** is offered for known saved playlists owned by
+someone else or curated by TIDAL. It removes the library follow, not the owner's
+playlist, queued tracks or local pins. Unknown saved status does not expose the action.
+
+After an explicit confirmation and ownership/revision checks, one removal request
+is sent. Only a complete single-response library listing (up to 50 entries) verifies
+absence. Larger or incomplete libraries leave removal explicitly unverified: Refresh
+and inspect before trying again. No automatic retry or optimistic absence inference.
+Live endpoint interoperability has not been tested.
+
 ## Owned-playlist deletion (v0.23.0)
 
 **Playlist… → Delete playlist…** is available on your own playlists. Type

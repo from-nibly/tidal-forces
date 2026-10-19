@@ -305,6 +305,7 @@ impl App {
                 | Request::EditPlaylistMetadata { .. }
                 | Request::ReorderPlaylist { .. }
                 | Request::DeletePlaylist { .. }
+                | Request::UnfollowPlaylist { .. }
                 | Request::CreatePlaylist { .. }
                 | Request::AddToPlaylist { .. }
                 | Request::RemoveFromPlaylist { .. }
@@ -707,6 +708,12 @@ impl App {
                         });
                     }
                 }
+                Event::PlaylistUnfollowed {
+                    user,
+                    operation,
+                    id,
+                    result,
+                } => self.playlist_unfollowed(user, operation, id, result),
                 Event::PlaylistDeleted {
                     user,
                     operation,
@@ -2157,12 +2164,14 @@ impl App {
                 ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(MUTED));
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new("Paste tracks…")).on_hover_text("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.").clicked() {self.request_track_paste(ui.ctx());}
-                if self.playlist_page.as_ref().is_some_and(|p|p.editable) {
+                if self.playlist_page.as_ref().is_some_and(|p|p.editable) || self.can_unfollow_playlist() {
                     ui.add_enabled_ui(!self.loading && self.browse_cache.ready && self.metadata_editor.is_none() && self.reorder_dialog.is_none() && self.delete_dialog.is_none(), |ui| {
                         ui.menu_button("Playlist…", |ui| {
-                            if ui.add_enabled(self.playlist_page.as_ref().is_some_and(|p|p.playlist.description.is_some()), egui::Button::new("Edit details…")).clicked() { ui.close(); self.open_metadata_editor(); }
-                            ui.separator();
-                            if ui.button(egui::RichText::new("Delete playlist…").color(Color32::LIGHT_RED)).clicked() { ui.close(); self.open_delete_playlist(); }
+                            if self.playlist_page.as_ref().is_some_and(|p|p.editable) {
+                                if ui.add_enabled(self.playlist_page.as_ref().is_some_and(|p|p.playlist.description.is_some()), egui::Button::new("Edit details…")).clicked() { ui.close(); self.open_metadata_editor(); }
+                                ui.separator();
+                                if ui.button(egui::RichText::new("Delete playlist…").color(Color32::LIGHT_RED)).clicked() { ui.close(); self.open_delete_playlist(); }
+                            } else if ui.button("Unfollow playlist…").clicked() { ui.close(); self.open_unfollow_playlist(); }
                         });
                     });
                 }
