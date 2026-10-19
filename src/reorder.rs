@@ -1,7 +1,16 @@
 use crate::model::PlaylistPage;
 use anyhow::{Result, ensure};
 
-pub const MAX_TRACKS: usize = 100;
+pub const MAX_TRACKS: usize = crate::queue::MAX_ENTRIES;
+
+#[derive(Clone)]
+pub struct Check {
+    pub user: u64,
+    pub id: String,
+    pub etag: String,
+    pub count: usize,
+    pub offset: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -38,7 +47,7 @@ impl Move {
         );
         ensure!(
             (2..=MAX_TRACKS).contains(&self.ids.len()) && self.ids.iter().all(|id| *id != 0),
-            "Reordering requires 2–100 available tracks"
+            "Reordering requires 2–50,000 available tracks"
         );
         ensure!(
             self.from < self.ids.len(),
@@ -87,7 +96,7 @@ mod tests {
     use super::*;
     #[test]
     fn adjacent_moves_are_exact_swaps_and_never_use_forward_insertion() {
-        for len in 2..=MAX_TRACKS {
+        for len in 2..=100 {
             for from in 0..len {
                 for target in [Target::Up, Target::Down] {
                     let change = Move {
@@ -139,7 +148,7 @@ mod tests {
         change.from = 0;
         change.ids.push(0);
         assert!(change.after().is_err());
-        change.ids = vec![9; 101];
+        change.ids = vec![9; MAX_TRACKS + 1];
         assert!(change.after().is_err());
     }
 }

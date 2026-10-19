@@ -9,7 +9,10 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{Client, Method, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 // Public compatibility-client identifiers used by python-tidal (not user credentials).
 // TIDAL can revoke these; deployments may provide their own approved client via env.
@@ -957,22 +960,120 @@ impl Api {
         Ok(page.etag)
     }
 
-    pub async fn reorder_playlist(&mut self, change: &crate::reorder::Move) -> Result<()> {
-        let expected = change.after()?;
+    pub async fn check_reorder_page(
+        &mut self,
+        check: &crate::reorder::Check,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<u64>> {
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist move cancelled"
+        );
+        anyhow::ensure!(
+            check.user != 0
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.user_id == check.user),
+            "The playlist account changed"
+        );
+        anyhow::ensure!(
+            (2..=crate::reorder::MAX_TRACKS).contains(&check.count)
+                && check.offset < check.count
+                && check.offset.is_multiple_of(100),
+            "Invalid reorder page boundary"
+        );
+        let (playlist, etag) = self.playlist_metadata(&check.id).await?;
+        ensure_revision(&check.etag, &etag)?;
+        anyhow::ensure!(
+            playlist.uuid == check.id
+                && self.owns(&playlist)
+                && playlist.number_of_videos == 0
+                && playlist.number_of_tracks == check.count as u64,
+            "The playlist changed or is not editable"
+        );
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist move cancelled"
+        );
+        let response = self
+            .request(
+                Method::GET,
+                "v1",
+                &format!("playlists/{}/items", check.id),
+                &[("limit", "100"), ("offset", &check.offset.to_string())],
+                &[],
+                None,
+            )
+            .await?;
+        ensure_revision(
+            &check.etag,
+            response
+                .headers()
+                .get("etag")
+                .context("Missing playlist item revision")?
+                .to_str()?,
+        )?;
+        let value: Value = response.json().await?;
+        let rows = value["items"]
+            .as_array()
+            .context("Missing playlist items")?;
+        anyhow::ensure!(
+            value["totalNumberOfItems"].as_u64() == Some(check.count as u64)
+                && rows.len() == 100.min(check.count - check.offset),
+            "The playlist page changed or is incomplete"
+        );
+        let ids = rows
+            .iter()
+            .map(|row| {
+                anyhow::ensure!(
+                    row["type"]
+                        .as_str()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("track")),
+                    "Playlist contains non-track entries"
+                );
+                row["item"]["id"]
+                    .as_u64()
+                    .filter(|id| *id != 0)
+                    .context("Playlist contains unavailable entries")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist move cancelled"
+        );
+        Ok(ids)
+    }
+
+    pub async fn write_reorder(
+        &mut self,
+        change: &crate::reorder::Move,
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
+        let (from, target) = change.indices()?;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist move cancelled before writing"
+        );
         anyhow::ensure!(
             self.session
                 .as_ref()
                 .is_some_and(|s| s.user_id == change.user),
             "The playlist account changed"
         );
-        let before = self
-            .playlist_page(&change.id, 0, Some(&change.etag))
-            .await?;
+        let (playlist, etag) = self.playlist_metadata(&change.id).await?;
+        ensure_revision(&change.etag, &etag)?;
         anyhow::ensure!(
-            change.matches(&before, &change.ids),
-            "The playlist changed or contains unavailable entries. Refresh before reordering."
+            playlist.uuid == change.id
+                && self.owns(&playlist)
+                && playlist.number_of_videos == 0
+                && playlist.number_of_tracks == change.ids.len() as u64,
+            "The playlist changed or is not editable"
         );
-        let (from, target) = change.indices()?;
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Playlist move cancelled before writing"
+        );
         let response = self
             .request(
                 Method::POST,
@@ -983,13 +1084,7 @@ impl Api {
                 Some(&change.etag),
             )
             .await?;
-        let written=response.headers().get("etag").and_then(|h|h.to_str().ok()).filter(|h|!h.trim().is_empty() && *h!=change.etag).context("The move may have completed, but no new revision was confirmed. Refresh and inspect before retrying.")?.to_owned();
-        let after=self.playlist_page(&change.id,0,Some(&written)).await.context("The move may have completed, but verification failed. Refresh and inspect before retrying.")?;
-        anyhow::ensure!(
-            change.matches(&after, &expected),
-            "The reordered playlist could not be verified. Refresh and inspect before retrying."
-        );
-        Ok(())
+        response.headers().get("etag").and_then(|h|h.to_str().ok()).filter(|h|!h.trim().is_empty() && *h!=change.etag).map(str::to_owned).context("The move may have completed, but no new revision was confirmed. Refresh and inspect before retrying.")
     }
 
     pub async fn edit_playlist_metadata(

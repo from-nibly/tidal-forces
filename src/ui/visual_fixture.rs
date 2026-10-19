@@ -27,7 +27,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "metadata",
             "pins",
             "pins-library",
-            "reorder"
+            "reorder",
+            "reorder-large"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -246,7 +247,15 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     if matches!(
         page,
-        "collection" | "selection" | "view" | "load" | "browse" | "metadata" | "pins" | "reorder"
+        "collection"
+            | "selection"
+            | "view"
+            | "load"
+            | "browse"
+            | "metadata"
+            | "pins"
+            | "reorder"
+            | "reorder-large"
     ) {
         app.playlist_page = Some(PlaylistPage {
             playlist: Playlist {
@@ -343,9 +352,19 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         pins.toggle("fixture-2", "Late hours").unwrap();
         app.pins = Some(pins);
     }
-    if page == "reorder" {
+    if matches!(page, "reorder" | "reorder-large") {
+        if page == "reorder-large" {
+            app.tracks = app.tracks.iter().cycle().take(205).cloned().collect();
+            let playlist = app.playlist_page.as_mut().unwrap();
+            playlist.playlist.number_of_tracks = 205;
+            playlist.next_offset = 205;
+            playlist.rows = app.tracks.iter().cloned().enumerate().collect();
+        }
         app.browse_loaded();
-        app.open_reorder(3, crate::reorder::Target::Down);
+        app.open_reorder(
+            if page == "reorder-large" { 103 } else { 3 },
+            crate::reorder::Target::Down,
+        );
     }
     if page == "metadata" {
         app.browse_loaded();

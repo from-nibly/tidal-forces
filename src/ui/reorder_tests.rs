@@ -1,47 +1,313 @@
 use super::*;
 use crate::ui::tests::{fixture, track};
 
-fn prepare(app: &mut App) {
+fn prepare(app: &mut App, count: usize) {
     app.page = Page::Collection {
         kind: "playlists".into(),
         id: "fixture-list".into(),
         title: "Fixture".into(),
     };
-    app.tracks = vec![track(9), track(8), track(9)];
+    app.tracks = (0..count).map(|i| track((i % 7 + 1) as u64)).collect();
     app.playlist_page = Some(PlaylistPage {
         playlist: Playlist {
             uuid: "fixture-list".into(),
             title: "Fixture".into(),
-            number_of_tracks: 3,
+            number_of_tracks: count as u64,
             ..Default::default()
         },
         etag: "revision-1".into(),
         editable: true,
         rows: app.tracks.iter().cloned().enumerate().collect(),
-        next_offset: 3,
+        next_offset: count,
         more: false,
     });
     app.browse_loaded();
 }
-#[test]
-fn reorder_action_freezes_raw_occurrence_and_never_changes_queue() {
-    let (_, mut app, _events, mut requests) = fixture();
-    prepare(&mut app);
-    let revision = app.queue.revision();
-    app.open_reorder(2, Target::Top);
-    app.open_reorder(2, Target::Top);
-    assert!(
-        matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==2 && change.ids==[9,8,9] && change.target==Target::Top)
+fn checked(app: &mut App, request: Request, ids: &[u64], offset: usize, etag: &str) {
+    let Request::CheckReorder {
+        operation,
+        check,
+        cancelled,
+    } = request
+    else {
+        panic!("expected a verification page")
+    };
+    assert_eq!(check.offset, offset);
+    assert_eq!(check.etag, etag);
+    assert_eq!(check.count, ids.len());
+    assert!(!cancelled.load(Ordering::Acquire));
+    app.reorder_checked(
+        operation,
+        check,
+        Ok(ids[offset..(offset + 100).min(ids.len())].to_vec()),
     );
-    assert!(requests.try_recv().is_err());
-    assert_eq!(app.queue.revision(), revision);
-    assert!(!app.browse_cache.ready);
 }
 #[test]
-fn reorder_is_unavailable_for_partial_transformed_video_or_foreign_views() {
+fn paged_preflight_single_write_and_full_readback_preserve_loaded_view_and_queue() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    let original: Vec<_> = app.tracks.iter().map(|t| t.id).collect();
+    let queue_revision = app.queue.revision();
+    let generation = app.generation;
+    app.track_selection.rows.insert(204);
+    app.open_reorder(204, Target::Top);
+    let expected = app.reorder_dialog.as_ref().unwrap().expected.clone();
+    for offset in [0, 100, 200] {
+        if offset > 0 {
+            app.reorder_tick();
+        }
+        let request = requests.try_recv().unwrap();
+        app.reorder_tick();
+        assert!(requests.try_recv().is_err());
+        checked(&mut app, request, &original, offset, "revision-1");
+    }
+    assert!(requests.try_recv().is_err());
+    app.reorder_tick();
+    let Request::ReorderPlaylist {
+        operation, change, ..
+    } = requests.try_recv().unwrap()
+    else {
+        panic!("expected one write")
+    };
+    assert_eq!(change.from, 204);
+    assert_eq!(change.ids, original);
+    assert!(!app.browse_cache.ready);
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    app.reorder_result(7, operation, "fixture-list".into(), Ok("revision-2".into()));
+    app.track_view.query = "fixture".into();
+    for offset in [0, 100, 200] {
+        app.reorder_tick();
+        checked(
+            &mut app,
+            requests.try_recv().unwrap(),
+            &expected,
+            offset,
+            "revision-2",
+        );
+    }
+    assert!(app.reorder_dialog.is_none());
+    assert!(requests.try_recv().is_err());
+    assert_eq!(
+        app.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(app.tracks.len(), 205);
+    assert_eq!(app.playlist_page.as_ref().unwrap().etag, "revision-2");
+    assert_eq!(app.track_view.query, "fixture");
+    assert!(app.browse_cache.ready);
+    assert!(app.generation > generation);
+    assert!(app.track_selection.rows.is_empty());
+    assert_eq!(app.queue.revision(), queue_revision);
+}
+#[test]
+fn verification_yields_to_buffering_and_cancellation_reaches_queued_work() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    app.open_reorder(204, Target::Top);
+    let original = app.reorder_dialog.as_ref().unwrap().change.ids.clone();
+    checked(
+        &mut app,
+        requests.try_recv().unwrap(),
+        &original,
+        0,
+        "revision-1",
+    );
+    app.buffering = true;
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    app.buffering = false;
+    app.reorder_tick();
+    let Request::CheckReorder {
+        operation,
+        check,
+        cancelled,
+    } = requests.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    app.navigate(Page::Settings);
+    assert!(cancelled.load(Ordering::Acquire));
+    assert!(app.reorder_dialog.is_none());
+    app.reorder_checked(operation, check, Ok(original[100..200].to_vec()));
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+}
+#[test]
+fn preflight_mismatch_or_scope_change_never_dispatches_a_write() {
+    for case in 0..4 {
+        let (_, mut app, _events, mut requests) = fixture();
+        prepare(&mut app, 3);
+        app.open_reorder(2, Target::Top);
+        let Request::CheckReorder {
+            operation,
+            mut check,
+            cancelled,
+        } = requests.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        match case {
+            0 => check.offset = 100,
+            1 => check.etag = "other".into(),
+            2 => app.account = Some(8),
+            _ => app.generation += 1,
+        }
+        app.reorder_checked(operation, check, Ok(vec![1, 2, 3]));
+        app.reorder_tick();
+        assert!(requests.try_recv().is_err());
+        assert!(cancelled.load(Ordering::Acquire));
+    }
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 3);
+    app.open_reorder(2, Target::Top);
+    let Request::CheckReorder {
+        operation, check, ..
+    } = requests.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    app.reorder_checked(operation, check, Ok(vec![3, 2, 1]));
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    assert!(
+        app.reorder_dialog
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("not sent")
+    );
+}
+#[test]
+fn readback_failure_never_reports_success_or_retries_write() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 3);
+    app.open_reorder(2, Target::Top);
+    checked(
+        &mut app,
+        requests.try_recv().unwrap(),
+        &[1, 2, 3],
+        0,
+        "revision-1",
+    );
+    app.reorder_tick();
+    let Request::ReorderPlaylist { operation, .. } = requests.try_recv().unwrap() else {
+        panic!()
+    };
+    app.reorder_result(7, operation, "fixture-list".into(), Ok("revision-2".into()));
+    app.reorder_tick();
+    let Request::CheckReorder {
+        operation, check, ..
+    } = requests.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    app.reorder_checked(operation, check, Ok(vec![1, 2, 3]));
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    assert!(!app.browse_cache.ready);
+    assert_eq!(
+        app.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert!(
+        app.reorder_dialog
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("may have completed")
+    );
+}
+#[test]
+fn mutation_or_refresh_stops_preflight_and_closed_worker_releases_busy_state() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 3);
+    app.open_reorder(2, Target::Top);
+    let Request::CheckReorder {
+        operation,
+        check,
+        cancelled,
+    } = requests.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    app.invalidate_browse_cache();
+    app.reorder_checked(operation, check, Ok(vec![1, 2, 3]));
+    app.reorder_tick();
+    assert!(cancelled.load(Ordering::Acquire));
+    assert!(app.reorder_dialog.is_none());
+    assert!(requests.try_recv().is_err());
+    app.browse_loaded();
+    drop(requests);
+    app.open_reorder(2, Target::Top);
+    assert!(!app.reorder_dialog.as_ref().unwrap().busy);
+    assert!(app.reorder_dialog.as_ref().unwrap().error.is_some());
+}
+#[test]
+fn cancellation_before_commit_or_after_queued_write_never_retries_or_reports_verified() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 3);
+    app.open_reorder(2, Target::Top);
+    checked(
+        &mut app,
+        requests.try_recv().unwrap(),
+        &[1, 2, 3],
+        0,
+        "revision-1",
+    );
+    app.invalidate_browse_cache();
+    app.reorder_tick();
+    assert!(app.reorder_dialog.is_none());
+    assert!(requests.try_recv().is_err());
+    app.browse_loaded();
+    app.open_reorder(2, Target::Top);
+    checked(
+        &mut app,
+        requests.try_recv().unwrap(),
+        &[1, 2, 3],
+        0,
+        "revision-1",
+    );
+    app.reorder_tick();
+    let Request::ReorderPlaylist {
+        operation,
+        cancelled,
+        ..
+    } = requests.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    app.navigate(Page::Settings);
+    assert!(cancelled.load(Ordering::Acquire));
+    app.reorder_result(7, operation, "fixture-list".into(), Ok("revision-2".into()));
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    assert!(app.reorder_dialog.is_none());
+    assert!(app.notice.as_ref().unwrap().contains("not fully verified"));
+}
+#[test]
+fn maximum_loaded_snapshot_can_begin_without_lifting_the_bound() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, MAX_TRACKS);
+    assert!(app.can_reorder_playlist());
+    app.open_reorder(MAX_TRACKS - 1, Target::Top);
+    assert!(
+        matches!(requests.try_recv(),Ok(Request::CheckReorder{check,..}) if check.count==MAX_TRACKS && check.offset==0)
+    );
+    app.cancel_reorder();
+    prepare(&mut app, MAX_TRACKS + 1);
+    assert!(!app.can_reorder_playlist());
+}
+
+#[test]
+fn incomplete_transformed_foreign_and_video_views_are_not_eligible() {
     for case in 0..5 {
         let (_, mut app, _events, mut requests) = fixture();
-        prepare(&mut app);
+        prepare(&mut app, 205);
         match case {
             0 => app.playlist_page.as_mut().unwrap().more = true,
             1 => app.track_view.reverse = true,
@@ -52,44 +318,15 @@ fn reorder_is_unavailable_for_partial_transformed_video_or_foreign_views() {
                     .playlist
                     .number_of_videos = 1
             }
-            3 => app.playlist_page.as_mut().unwrap().editable = false,
+            3 => app.account = Some(8),
             _ => {
-                app.playlist_page.as_mut().unwrap().rows.remove(0);
+                app.playlist_page.as_mut().unwrap().rows.pop();
             }
         }
         app.open_reorder(2, Target::Top);
         assert!(app.reorder_dialog.is_none());
         assert!(requests.try_recv().is_err());
     }
-}
-#[test]
-fn stale_account_or_unready_view_blocks_dispatch_and_failures_require_refresh() {
-    for account in [true, false] {
-        let (_, mut app, _events, mut requests) = fixture();
-        prepare(&mut app);
-        if account {
-            app.account = Some(8)
-        } else {
-            app.browse_cache.ready = false;
-        }
-        app.open_reorder(2, Target::Top);
-        assert!(requests.try_recv().is_err());
-    }
-    let (_, mut app, _events, mut requests) = fixture();
-    prepare(&mut app);
-    app.open_reorder(2, Target::Top);
-    requests.try_recv().unwrap();
-    let operation = app.reorder_serial;
-    app.reorder_result(8, operation, "fixture-list".into(), Err("foreign".into()));
-    assert!(app.reorder_dialog.as_ref().unwrap().error.is_none());
-    app.reorder_result(
-        7,
-        operation,
-        "fixture-list".into(),
-        Err("Refresh before retrying".into()),
-    );
-    app.open_reorder(2, Target::Top);
-    assert!(requests.try_recv().is_err());
 }
 fn draw(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
     ctx.run(
@@ -137,7 +374,7 @@ fn label(output: &egui::FullOutput, value: &str) -> egui::Pos2 {
         .unwrap()
 }
 #[test]
-fn row_menu_dispatches_once_without_a_confirmation_click() {
+fn menu_actions_begin_checks_immediately_without_confirmation_or_double_dispatch() {
     for (action, target, from) in [
         ("Move to playlist bottom", Target::Bottom, 0),
         ("Move down in playlist", Target::Down, 0),
@@ -145,7 +382,7 @@ fn row_menu_dispatches_once_without_a_confirmation_click() {
         ("Move to playlist top", Target::Top, 1),
     ] {
         let (ctx, mut app, _events, mut requests) = fixture();
-        prepare(&mut app);
+        prepare(&mut app, 3);
         let revision = app.queue.revision();
         let _ = draw(&ctx, &mut app, vec![]);
         let output = draw(&ctx, &mut app, vec![]);
@@ -163,24 +400,17 @@ fn row_menu_dispatches_once_without_a_confirmation_click() {
         click(&ctx, &mut app, label(&output, action));
         let output = draw(&ctx, &mut app, vec![]);
         assert!(!output.shapes.iter().any(
-        |shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Move track")
-    ));
-        assert!(app.reorder_dialog.as_ref().unwrap().busy);
+            |shape| matches!(&shape.shape,egui::Shape::Text(t) if t.galley.job.text=="Move track")
+        ));
         assert!(
-            matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==from && change.target==target)
+            matches!(requests.try_recv(),Ok(Request::CheckReorder{check,..}) if check.offset==0)
         );
-        assert_eq!(app.queue.revision(), revision);
+        let dialog = app.reorder_dialog.as_ref().unwrap();
+        assert!(dialog.busy);
+        assert_eq!(dialog.change.from, from);
+        assert_eq!(dialog.change.target, target);
+        app.reorder_tick();
         assert!(requests.try_recv().is_err());
+        assert_eq!(app.queue.revision(), revision);
     }
-}
-
-#[test]
-fn closed_worker_releases_reorder_busy_state_without_retry() {
-    let (_, mut app, _events, requests) = fixture();
-    prepare(&mut app);
-    drop(requests);
-    app.open_reorder(2, Target::Top);
-    let dialog = app.reorder_dialog.as_ref().unwrap();
-    assert!(!dialog.busy);
-    assert!(dialog.error.is_some());
 }

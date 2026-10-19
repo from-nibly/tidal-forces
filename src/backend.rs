@@ -103,9 +103,15 @@ pub enum Request {
         etag: Option<String>,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
+    CheckReorder {
+        operation: u64,
+        check: crate::reorder::Check,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     ReorderPlaylist {
         operation: u64,
         change: crate::reorder::Move,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
     EditPlaylistMetadata {
         user: u64,
@@ -188,11 +194,16 @@ pub enum Event {
         result: Result<String, String>,
     },
     PlaylistCreated(Playlist),
+    ReorderChecked {
+        operation: u64,
+        check: crate::reorder::Check,
+        result: Result<Vec<u64>, String>,
+    },
     PlaylistReordered {
         user: u64,
         operation: u64,
         id: String,
-        result: Result<(), String>,
+        result: Result<String, String>,
     },
     PlaylistMetadataEdited {
         user: u64,
@@ -452,8 +463,12 @@ impl Backend {
                                         let result = api.append_queue_batch(user, &id, &tracks, offset, etag.as_deref(), &cancelled).await.map_err(|error| error.to_string());
                                         events.send(Event::QueueBatchSaved { user, operation, offset, result });
                                     }
-                                    Request::ReorderPlaylist {operation,change} => {
-                                        let result=api.reorder_playlist(&change).await.map_err(|e|e.to_string());
+                                    Request::CheckReorder {operation,check,cancelled} => {
+                                        let result=api.check_reorder_page(&check,&cancelled).await.map_err(|e|e.to_string());
+                                        events.send(Event::ReorderChecked {operation,check,result});
+                                    }
+                                    Request::ReorderPlaylist {operation,change,cancelled} => {
+                                        let result=api.write_reorder(&change,&cancelled).await.map_err(|e|e.to_string());
                                         events.send(Event::PlaylistReordered {user:change.user,operation,id:change.id,result});
                                     }
                                     Request::EditPlaylistMetadata { user, operation, id, etag, title, description } => {

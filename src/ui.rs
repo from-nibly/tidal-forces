@@ -401,6 +401,7 @@ impl App {
     }
 
     fn show_location(&mut self, location: Location, autoplay: bool) {
+        self.cancel_reorder();
         self.save_browse_view();
         let target = location.clone();
         self.page = location.page;
@@ -455,6 +456,9 @@ impl App {
     }
 
     fn load_page(&mut self, offset: usize) {
+        if offset == 0 {
+            self.cancel_reorder();
+        }
         if offset == 0 {
             self.playlist_load = None;
             self.library_load = None;
@@ -521,6 +525,7 @@ impl App {
         }
         self.credentials.busy = true;
         self.credentials.confirm = false;
+        self.cancel_reorder();
         self.cancel_export(true);
         self.history_account_changed();
         self.checkpoint(true);
@@ -693,6 +698,11 @@ impl App {
                         });
                     }
                 }
+                Event::ReorderChecked {
+                    operation,
+                    check,
+                    result,
+                } => self.reorder_checked(operation, check, result),
                 Event::PlaylistReordered {
                     user,
                     operation,
@@ -744,6 +754,7 @@ impl App {
                 Event::Session(account) => {
                     let account_changed = self.account != account.as_ref().map(|(user, _)| *user);
                     if account_changed {
+                        self.cancel_reorder();
                         self.cancel_export(true);
                         self.credentials.confirm = false;
                         self.history_account_changed();
@@ -2665,6 +2676,7 @@ impl eframe::App for App {
         self.desktop_events(ctx);
         self.credential_close_guard(ctx);
         if ctx.input(|input| input.viewport().close_requested()) {
+            self.cancel_reorder();
             self.cancel_export(false);
             self.playlist_load = None;
             self.library_load = None;
@@ -2735,6 +2747,7 @@ impl eframe::App for App {
         self.export_tick();
         self.playlist_load_tick();
         self.library_load_tick();
+        self.reorder_tick();
         self.album_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);

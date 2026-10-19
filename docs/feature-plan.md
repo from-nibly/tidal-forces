@@ -1,9 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.20.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.20.0 (`8a313f39984e`); published managed pin `2b020ef`
-(installed from equivalent local pin `6f90d5c`).
-Approved: v0.21.0 adjacent playlist moves; publication/deployment in progress.
+**Status: v0.21.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.21.0 (`5897ff4db785`); published managed pin `09606f7`.
+Scoped installation used deployed-source commit `33a695f` on the verified prior
+baseline, not unrelated reconciled Home Manager master changes.
+Approved: v0.22.0 paged playlist reorder verification; publication/install in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -28,6 +29,27 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3m slice (v0.22.0)
+
+Reordering extends to fully loaded, owned playlists of 2–50,000 available tracks,
+still requiring Original order and no videos/unavailable rows. Selecting a move
+starts immediately, without another confirmation. Source verification and exact
+post-write read-back request one 100-row page at a time and yield while playback
+buffers. Every page checks account, playlist, revision, count and raw boundaries.
+A final ownership/revision check precedes the single conditional mutation.
+
+Preflight can be cancelled; navigation, refresh, sign-out and close signal queued
+work to stop. Once the write is dispatched, an interrupted/failed verification is
+reported as uncertain and requires Refresh/inspection, never retry or rollback.
+Only complete verified read-back updates the loaded table and revision; all loaded
+rows and view options are retained, selection is cleared, and the playback queue
+is unchanged. Snapshot construction happens on action, not every rendered row/frame.
+
+Tests cover multiple pages, duplicates, 50,000-entry bounds, mismatched/cancelled
+responses, cancellation around commit, yielding, backpressure and keeping a fully
+loaded 205-track view after verification. Synthetic checks do not establish live
+mutation interoperability; no agent-run live mutations are authorized.
 
 ## Approved P3l slice (v0.21.0)
 

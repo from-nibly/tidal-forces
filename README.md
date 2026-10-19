@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Paged playlist reordering (v0.22.0)
+
+Reordering supports fully loaded owned playlists of up to 50,000 available tracks.
+Source checks and exact read-back run one page at a time and yield while playback
+buffers. Original order and no videos/unavailable rows are still required.
+
+Actions start immediately. You can cancel before the move; navigation, refresh,
+sign-out and close stop follow-up work. If a dispatched move cannot be fully
+verified, Refresh and inspect it—there is no blind retry or rollback. Successful
+verification retains all loaded rows and leaves the playback queue unchanged.
+
 ## Adjacent playlist moves (v0.21.0)
 
 Track menus add **Move up / down in playlist**, alongside top/bottom. Actions run

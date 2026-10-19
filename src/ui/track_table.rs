@@ -543,7 +543,7 @@ impl App {
             let mut menu = |ui: &mut egui::Ui| {
                 track_menu(ui, t, &mut radio);
                 if removable {
-                    let help = "Reordering requires Original order and a fully loaded owned playlist of 2–100 available tracks, without videos.";
+                    let help = "Reordering requires Original order and a fully loaded owned playlist of 2–50,000 available tracks, without videos. Source and result are checked one page at a time.";
                     use crate::reorder::Target;
                     for (label, target) in [
                         ("Move to playlist top", Target::Top),
