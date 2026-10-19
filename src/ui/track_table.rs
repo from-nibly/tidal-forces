@@ -544,27 +544,25 @@ impl App {
                 track_menu(ui, t, &mut radio);
                 if removable {
                     let help = "Reordering requires Original order and a fully loaded owned playlist of 2–100 available tracks, without videos.";
-                    if ui
-                        .add_enabled(
-                            reorderable && i > 0,
-                            egui::Button::new("Move to playlist top"),
-                        )
-                        .on_disabled_hover_text(help)
-                        .clicked()
-                    {
-                        reorder = Some((i, false));
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(
-                            reorderable && i + 1 < self.tracks.len(),
-                            egui::Button::new("Move to playlist bottom"),
-                        )
-                        .on_disabled_hover_text(help)
-                        .clicked()
-                    {
-                        reorder = Some((i, true));
-                        ui.close();
+                    use crate::reorder::Target;
+                    for (label, target) in [
+                        ("Move to playlist top", Target::Top),
+                        ("Move up in playlist", Target::Up),
+                        ("Move down in playlist", Target::Down),
+                        ("Move to playlist bottom", Target::Bottom),
+                    ] {
+                        let within_bounds = match target {
+                            Target::Top | Target::Up => i > 0,
+                            Target::Down | Target::Bottom => i + 1 < self.tracks.len(),
+                        };
+                        if ui
+                            .add_enabled(reorderable && within_bounds, egui::Button::new(label))
+                            .on_disabled_hover_text(help)
+                            .clicked()
+                        {
+                            reorder = Some((i, target));
+                            ui.close();
+                        }
                     }
                 }
                 if removable && ui.button("Remove from this playlist…").clicked() {
@@ -688,8 +686,8 @@ impl App {
         if let Some((item, saved)) = favorite {
             self.set_favorite(item, saved);
         }
-        if let Some((from, to_end)) = reorder {
-            self.open_reorder(from, to_end);
+        if let Some((from, target)) = reorder {
+            self.open_reorder(from, target);
         }
         if let Some(i) = remove
             && let Some(page) = &self.playlist_page

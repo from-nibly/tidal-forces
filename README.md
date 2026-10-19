@@ -216,6 +216,13 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Adjacent playlist moves (v0.21.0)
+
+Track menus add **Move up / down in playlist**, alongside top/bottom. Actions run
+immediately without another confirmation and preserve duplicate occurrences.
+The same ownership, Original-order, 2–100 available-track and exact read-back guards
+apply. Your existing playback queue stays unchanged.
+
 ## Playlist reordering (v0.20.0)
 
 A track's menu offers **Move to playlist top / bottom**. Selecting an action

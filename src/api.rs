@@ -972,12 +972,12 @@ impl Api {
             change.matches(&before, &change.ids),
             "The playlist changed or contains unavailable entries. Refresh before reordering."
         );
-        let target = if change.to_end { change.ids.len() } else { 0 };
+        let (from, target) = change.indices()?;
         let response = self
             .request(
                 Method::POST,
                 "v1",
-                &format!("playlists/{}/items/{}", change.id, change.from),
+                &format!("playlists/{}/items/{from}", change.id),
                 &[],
                 &[("toIndex", &target.to_string())],
                 Some(&change.etag),

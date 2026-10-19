@@ -9,7 +9,7 @@ fn change() -> crate::reorder::Move {
         etag: "\"revision-1\"".into(),
         ids: vec![9, 8, 9],
         from: 2,
-        to_end: false,
+        target: crate::reorder::Target::Top,
     }
 }
 fn metadata() -> Value {
@@ -41,12 +41,38 @@ async fn reorder_rejects_stale_preflight_and_intervening_readback_revision() {
 }
 
 #[tokio::test]
+async fn adjacent_moves_send_backwards_raw_indices_and_verify_exact_order() {
+    use crate::reorder::Target;
+    for (from, target) in [(2, Target::Up), (1, Target::Down)] {
+        let mut change = change();
+        change.from = from;
+        change.target = target;
+        let mut write = step("POST", "/v1/playlists/test-list/items/2", json!({}));
+        write.etag = "\"revision-2\"";
+        write.contains = vec!["toIndex=1", "if-none-match: \"revision-1\""];
+        let mut meta = step("GET", "/v1/playlists/test-list", metadata());
+        meta.etag = "\"revision-2\"";
+        let mut rows = step("GET", "/v1/playlists/test-list/items", items(&[9, 9, 8]));
+        rows.etag = "\"revision-2\"";
+        let (mut api, server) = mock(vec![
+            step("GET", "/v1/playlists/test-list", metadata()),
+            step("GET", "/v1/playlists/test-list/items", items(&change.ids)),
+            write,
+            meta,
+            rows,
+        ]);
+        api.reorder_playlist(&change).await.unwrap();
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn reorder_posts_raw_occurrence_and_verifies_both_endpoints() {
     for bottom in [false, true] {
         let mut change = change();
         if bottom {
             change.from = 0;
-            change.to_end = true;
+            change.target = crate::reorder::Target::Bottom;
         }
         let mut write = step(
             "POST",

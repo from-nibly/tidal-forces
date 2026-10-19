@@ -1,10 +1,9 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.19.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.19.0 (`363312a3e8ed`); published managed pin `1f9a6f8`
-(installed from equivalent local pin `0c13a46`).
-Approved: v0.20.0 bounded playlist reordering with immediate menu actions;
-publication/deployment in progress.
+**Status: v0.20.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.20.0 (`8a313f39984e`); published managed pin `2b020ef`
+(installed from equivalent local pin `6f90d5c`).
+Approved: v0.21.0 adjacent playlist moves; publication/deployment in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +28,19 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3l slice (v0.21.0)
+
+**Move up / down in playlist** joins the immediate top/bottom row-menu actions.
+The same complete-snapshot, ownership, account, revision, 100-track and read-back
+guards apply. Down swaps adjacent occurrences by moving the next raw occurrence
+before the selected one, avoiding ambiguous forward-insertion offsets. Duplicate
+songs retain position-based identity; the playback queue is unchanged.
+
+Synthetic contracts verify both wire indices and exact resulting order. Exhaustive
+adjacent-position checks cover 2–100 tracks with repeated IDs; real UI clicks cover
+all four actions without an extra confirmation. Larger paged reordering and drag
+moves remain future work; no live mutation interoperability is claimed.
 
 ## Approved P3k slice (v0.20.0)
 

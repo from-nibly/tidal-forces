@@ -2,7 +2,7 @@ use super::*;
 #[cfg(test)]
 #[path = "reorder_tests.rs"]
 mod tests;
-use crate::reorder::{MAX_TRACKS, Move};
+use crate::reorder::{MAX_TRACKS, Move, Target};
 
 pub(super) struct Dialog {
     change: Move,
@@ -35,14 +35,14 @@ impl App {
             etag: page.etag.clone(),
             ids: self.tracks.iter().map(|track| track.id).collect(),
             from: 0,
-            to_end: true,
+            target: Target::Bottom,
         };
         (change.after().is_ok() && change.matches(page, &change.ids)).then_some(change)
     }
     pub(super) fn can_reorder_playlist(&self) -> bool {
         self.reorder_dialog.is_none() && self.reorder_scope().is_some()
     }
-    pub(super) fn open_reorder(&mut self, from: usize, to_end: bool) {
+    pub(super) fn open_reorder(&mut self, from: usize, target: Target) {
         if self.reorder_dialog.is_some() {
             return;
         }
@@ -50,7 +50,7 @@ impl App {
             return;
         };
         change.from = from;
-        change.to_end = to_end;
+        change.target = target;
         if change.after().is_err() {
             return;
         }
@@ -155,13 +155,9 @@ impl App {
             .default_width(380.)
             .show(ctx, |ui| {
                 ui.label(format!(
-                    "Moving original position {} to the {}.",
+                    "Moving original position {} {}.",
                     dialog.change.from + 1,
-                    if dialog.change.to_end {
-                        "bottom"
-                    } else {
-                        "top"
-                    }
+                    dialog.change.target.label()
                 ));
                 ui.add(egui::Label::new(RichText::new(&dialog.title).strong()).truncate());
                 ui.label("This changes your TIDAL playlist, not the current playback queue.");

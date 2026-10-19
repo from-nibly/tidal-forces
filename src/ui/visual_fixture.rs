@@ -345,7 +345,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     }
     if page == "reorder" {
         app.browse_loaded();
-        app.open_reorder(3, false);
+        app.open_reorder(3, crate::reorder::Target::Down);
     }
     if page == "metadata" {
         app.browse_loaded();

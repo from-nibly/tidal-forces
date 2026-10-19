@@ -28,10 +28,10 @@ fn reorder_action_freezes_raw_occurrence_and_never_changes_queue() {
     let (_, mut app, _events, mut requests) = fixture();
     prepare(&mut app);
     let revision = app.queue.revision();
-    app.open_reorder(2, false);
-    app.open_reorder(2, false);
+    app.open_reorder(2, Target::Top);
+    app.open_reorder(2, Target::Top);
     assert!(
-        matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==2 && change.ids==[9,8,9] && !change.to_end)
+        matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==2 && change.ids==[9,8,9] && change.target==Target::Top)
     );
     assert!(requests.try_recv().is_err());
     assert_eq!(app.queue.revision(), revision);
@@ -57,7 +57,7 @@ fn reorder_is_unavailable_for_partial_transformed_video_or_foreign_views() {
                 app.playlist_page.as_mut().unwrap().rows.remove(0);
             }
         }
-        app.open_reorder(2, false);
+        app.open_reorder(2, Target::Top);
         assert!(app.reorder_dialog.is_none());
         assert!(requests.try_recv().is_err());
     }
@@ -72,12 +72,12 @@ fn stale_account_or_unready_view_blocks_dispatch_and_failures_require_refresh() 
         } else {
             app.browse_cache.ready = false;
         }
-        app.open_reorder(2, false);
+        app.open_reorder(2, Target::Top);
         assert!(requests.try_recv().is_err());
     }
     let (_, mut app, _events, mut requests) = fixture();
     prepare(&mut app);
-    app.open_reorder(2, false);
+    app.open_reorder(2, Target::Top);
     requests.try_recv().unwrap();
     let operation = app.reorder_serial;
     app.reorder_result(8, operation, "fixture-list".into(), Err("foreign".into()));
@@ -88,7 +88,7 @@ fn stale_account_or_unready_view_blocks_dispatch_and_failures_require_refresh() 
         "fixture-list".into(),
         Err("Refresh before retrying".into()),
     );
-    app.open_reorder(2, false);
+    app.open_reorder(2, Target::Top);
     assert!(requests.try_recv().is_err());
 }
 fn draw(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -138,32 +138,40 @@ fn label(output: &egui::FullOutput, value: &str) -> egui::Pos2 {
 }
 #[test]
 fn row_menu_dispatches_once_without_a_confirmation_click() {
-    let (ctx, mut app, _events, mut requests) = fixture();
-    prepare(&mut app);
-    let revision = app.queue.revision();
-    let _ = draw(&ctx, &mut app, vec![]);
-    let output = draw(&ctx, &mut app, vec![]);
-    let more = output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            egui::Shape::Circle(circle) if circle.radius == 1.25 => Some(circle.center),
-            _ => None,
-        })
-        .unwrap();
-    click(&ctx, &mut app, more);
-    let output = draw(&ctx, &mut app, vec![]);
-    click(&ctx, &mut app, label(&output, "Move to playlist bottom"));
-    let output = draw(&ctx, &mut app, vec![]);
-    assert!(!output.shapes.iter().any(
+    for (action, target, from) in [
+        ("Move to playlist bottom", Target::Bottom, 0),
+        ("Move down in playlist", Target::Down, 0),
+        ("Move up in playlist", Target::Up, 1),
+        ("Move to playlist top", Target::Top, 1),
+    ] {
+        let (ctx, mut app, _events, mut requests) = fixture();
+        prepare(&mut app);
+        let revision = app.queue.revision();
+        let _ = draw(&ctx, &mut app, vec![]);
+        let output = draw(&ctx, &mut app, vec![]);
+        let more = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 1.25 => Some(circle.center),
+                _ => None,
+            })
+            .nth(from * 3)
+            .unwrap();
+        click(&ctx, &mut app, more);
+        let output = draw(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, label(&output, action));
+        let output = draw(&ctx, &mut app, vec![]);
+        assert!(!output.shapes.iter().any(
         |shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Move track")
     ));
-    assert!(app.reorder_dialog.as_ref().unwrap().busy);
-    assert!(
-        matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==0 && change.to_end)
-    );
-    assert_eq!(app.queue.revision(), revision);
-    assert!(requests.try_recv().is_err());
+        assert!(app.reorder_dialog.as_ref().unwrap().busy);
+        assert!(
+            matches!(requests.try_recv(),Ok(Request::ReorderPlaylist{change,..}) if change.from==from && change.target==target)
+        );
+        assert_eq!(app.queue.revision(), revision);
+        assert!(requests.try_recv().is_err());
+    }
 }
 
 #[test]
@@ -171,7 +179,7 @@ fn closed_worker_releases_reorder_busy_state_without_retry() {
     let (_, mut app, _events, requests) = fixture();
     prepare(&mut app);
     drop(requests);
-    app.open_reorder(2, false);
+    app.open_reorder(2, Target::Top);
     let dialog = app.reorder_dialog.as_ref().unwrap();
     assert!(!dialog.busy);
     assert!(dialog.error.is_some());
