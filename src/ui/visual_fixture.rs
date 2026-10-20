@@ -21,6 +21,9 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "library-load",
             "library-loading",
             "library-albums",
+            "library-artists",
+            "library-albums-filtered",
+            "library-artists-filtered",
             "library-selected",
             "album-load",
             "album-loading",
@@ -299,7 +302,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         "library-load" | "library-loading" | "library-selected" => {
             Page::Library(FavoriteKind::Tracks)
         }
-        "albums" | "library-albums" => {
+        "albums" | "library-albums" | "library-albums-filtered" => {
             app.albums = app.tracks[..4]
                 .iter()
                 .map(|t| Album {
@@ -309,7 +312,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
                 .collect();
             Page::Library(FavoriteKind::Albums)
         }
-        "artists" => {
+        "artists" | "library-artists" | "library-artists-filtered" => {
             app.artists = app.tracks[..4]
                 .iter()
                 .map(|t| Artist {
@@ -336,12 +339,21 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     };
     if matches!(
         page,
-        "library-load" | "library-loading" | "library-albums" | "library-selected"
+        "library-load"
+            | "library-loading"
+            | "library-albums"
+            | "library-artists"
+            | "library-albums-filtered"
+            | "library-artists-filtered"
+            | "library-selected"
     ) {
-        if page == "library-albums" {
+        if matches!(
+            app.page,
+            Page::Library(FavoriteKind::Albums | FavoriteKind::Artists)
+        ) {
             app.tracks.clear();
         }
-        app.library_offset = app.tracks.len() + app.albums.len();
+        app.library_offset = app.tracks.len() + app.albums.len() + app.artists.len();
         app.library_total = Some(205);
         app.more = true;
         app.browse_loaded();
@@ -349,6 +361,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.start_library_load();
             app.loading = true;
         }
+    }
+    if matches!(page, "library-albums-filtered" | "library-artists-filtered") {
+        app.library_view.query = "signal".into();
+        app.library_view.sort = library_view::Sort::Name;
     }
     if matches!(page, "pins" | "pins-library") {
         let mut pins = crate::pins::Pins::new(7);

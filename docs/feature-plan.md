@@ -1,10 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.23.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.23.0 (`30aa022db203`); published managed pin `44de077`.
-Scoped installation used deployed-source commit `3ba5ee3` on the verified prior
+**Status: v0.24.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.24.0 (`3ba5f063588c`); published managed pin `7e26f63`.
+Scoped installation used deployed-source commit `5e52ec7` on the verified prior
 baseline, preserving SMAD v0.5.1 without deploying unrelated reconciled master changes.
-Approved: v0.24.0 distinct saved-playlist unfollowing; publication/install in progress.
+Approved: v0.25.0 saved album/artist view controls; publication/install in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +29,21 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3p slice (v0.25.0)
+
+Saved Albums and Artists gain loaded-only filtering and view-only sorting. Albums
+match title or artist and sort by Name or Artist; artists match/sort by name.
+Original order remains available; the sort-adjacent hamburger has Reverse and Reset.
+Load-all controls share the row; shown/loaded counts disclose the scope explicitly.
+
+Only a cached index projection changes: source arrays, raw pagination, membership,
+queue and remote saved order remain unchanged. New pages participate in the current
+view; idle frames do not rebuild sorting keys. Back/Forward restores view options
+and scroll; fresh navigation/account scope resets them. Card identities use raw
+source positions and account/generation scope, so sorting or append cannot retarget
+a held click. No-match and empty states describe loaded data, not inferred absence.
+Persistent caches and remaining playlist drag/middle moves stay separate work.
 
 ## Approved P3o slice (v0.24.0)
 

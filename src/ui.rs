@@ -22,6 +22,7 @@ mod favorite_cache;
 mod history;
 mod library;
 mod library_load;
+mod library_view;
 pub(crate) mod navigation;
 mod pins;
 mod playback;
@@ -114,6 +115,7 @@ pub struct App {
     tracks: Vec<Track>,
     track_selection: selection::Selection,
     track_view: track_view::View,
+    library_view: library_view::View,
     playlist_load: Option<playlist_load::PlaylistLoad>,
     library_load: Option<library_load::LibraryLoad>,
     album_position: Option<album_load::Position>,
@@ -248,6 +250,7 @@ impl App {
             tracks: vec![],
             track_selection: selection::Selection::default(),
             track_view: track_view::View::default(),
+            library_view: library_view::View::default(),
             playlist_load: None,
             library_load: None,
             album_position: None,
@@ -425,6 +428,7 @@ impl App {
         self.tracks.clear();
         self.track_selection.clear();
         self.track_view = Default::default();
+        self.library_view = Default::default();
         self.playlist_load = None;
         self.library_load = None;
         self.album_load = None;
@@ -813,6 +817,7 @@ impl App {
                         self.page = Page::Home;
                     }
                     self.navigation = Navigation::default();
+                    self.library_view = Default::default();
                     self.query.clear();
                     self.search_query.clear();
                     self.login = None;
@@ -872,6 +877,9 @@ impl App {
                         self.browse_cache.restored = false;
                         self.track_selection.clear();
                         self.track_view.invalidate();
+                    }
+                    if !append {
+                        self.library_view.invalidate();
                     }
                     self.observe_library_membership(kind, &page, append);
                     self.library_total = page.total;
@@ -2206,7 +2214,7 @@ impl App {
         if self.page.is_library() {
             self.library_tabs(ui);
             if self.page != Page::Library(FavoriteKind::Tracks) {
-                self.library_load_controls(ui);
+                self.library_view_controls(ui);
             }
         }
         if self.page == Page::Playlists {
@@ -2233,45 +2241,49 @@ impl App {
             }
             let mut radio = None;
             let mut selected_artist = None;
-            surfaces::media_shelf(
-                ui,
-                "artists",
-                &self.artists,
-                self.page.is_library(),
-                100.,
-                |ui, artist, width| {
-                    surfaces::card(ui, width, |ui| {
-                        if rounded_artwork(
-                            ui,
-                            cover_url(artist.picture.as_deref(), 320),
-                            width - 26.,
-                            ((width - 26.) / 2.) as u8,
-                        )
-                        .clicked()
-                        {
-                            selected_artist = Some(artist.id);
-                        }
-                        if ui
-                            .add(egui::Button::new(&artist.name).frame(false).truncate())
+            ui.push_id(("artist-cards", self.account, self.generation), |ui| {
+                surfaces::media_shelf_ordered(
+                    ui,
+                    "artists",
+                    &self.artists,
+                    (self.page == Page::Library(FavoriteKind::Artists))
+                        .then_some(self.library_view.rows.as_slice()),
+                    self.page.is_library(),
+                    100.,
+                    |ui, artist, width| {
+                        surfaces::card(ui, width, |ui| {
+                            if rounded_artwork(
+                                ui,
+                                cover_url(artist.picture.as_deref(), 320),
+                                width - 26.,
+                                ((width - 26.) / 2.) as u8,
+                            )
                             .clicked()
-                        {
-                            selected_artist = Some(artist.id);
-                        }
-                        favorite_button(
-                            ui,
-                            &self.favorites,
-                            Favorite::new(FavoriteKind::Artists, artist.id),
-                            &mut favorite,
-                        );
-                        if ui.small_button("Start artist radio").clicked() {
-                            radio = Some(RadioSeed::Artist {
-                                id: artist.id,
-                                name: artist.name.clone(),
-                            });
-                        }
-                    });
-                },
-            );
+                            {
+                                selected_artist = Some(artist.id);
+                            }
+                            if ui
+                                .add(egui::Button::new(&artist.name).frame(false).truncate())
+                                .clicked()
+                            {
+                                selected_artist = Some(artist.id);
+                            }
+                            favorite_button(
+                                ui,
+                                &self.favorites,
+                                Favorite::new(FavoriteKind::Artists, artist.id),
+                                &mut favorite,
+                            );
+                            if ui.small_button("Start artist radio").clicked() {
+                                radio = Some(RadioSeed::Artist {
+                                    id: artist.id,
+                                    name: artist.name.clone(),
+                                });
+                            }
+                        });
+                    },
+                );
+            });
             if let Some(seed) = radio {
                 self.navigate(Page::Radio(seed));
             } else if let Some(id) = selected_artist {
@@ -2285,40 +2297,44 @@ impl App {
                 ui.add_space(8.);
             }
             let mut selected = None;
-            surfaces::media_shelf(
-                ui,
-                "albums",
-                &self.albums,
-                self.page.is_library(),
-                92.,
-                |ui, album, width| {
-                    surfaces::card(ui, width, |ui| {
-                        if artwork(ui, cover_url(album.cover.as_deref(), 320), width - 26.)
-                            .clicked()
-                        {
-                            selected = Some(album.clone());
-                        }
-                        if ui
-                            .add(egui::Button::new(&album.title).frame(false).truncate())
-                            .clicked()
-                        {
-                            selected = Some(album.clone());
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&album.artist.name).size(12.).color(MUTED),
-                            )
-                            .truncate(),
-                        );
-                        favorite_button(
-                            ui,
-                            &self.favorites,
-                            Favorite::new(FavoriteKind::Albums, album.id),
-                            &mut favorite,
-                        );
-                    });
-                },
-            );
+            ui.push_id(("album-cards", self.account, self.generation), |ui| {
+                surfaces::media_shelf_ordered(
+                    ui,
+                    "albums",
+                    &self.albums,
+                    (self.page == Page::Library(FavoriteKind::Albums))
+                        .then_some(self.library_view.rows.as_slice()),
+                    self.page.is_library(),
+                    92.,
+                    |ui, album, width| {
+                        surfaces::card(ui, width, |ui| {
+                            if artwork(ui, cover_url(album.cover.as_deref(), 320), width - 26.)
+                                .clicked()
+                            {
+                                selected = Some(album.clone());
+                            }
+                            if ui
+                                .add(egui::Button::new(&album.title).frame(false).truncate())
+                                .clicked()
+                            {
+                                selected = Some(album.clone());
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&album.artist.name).size(12.).color(MUTED),
+                                )
+                                .truncate(),
+                            );
+                            favorite_button(
+                                ui,
+                                &self.favorites,
+                                Favorite::new(FavoriteKind::Albums, album.id),
+                                &mut favorite,
+                            );
+                        });
+                    },
+                );
+            });
             if let Some(a) = selected {
                 self.navigate(Page::Collection {
                     kind: "albums".into(),
@@ -2338,7 +2354,7 @@ impl App {
             if !self.loading && self.albums.is_empty() && self.artists.is_empty() {
                 ui.label(
                     RichText::new(
-                        "Nothing saved here yet. Search for music to add to your library.",
+                        "No items loaded here yet. Load more or search for music to add to your library.",
                     )
                     .color(MUTED),
                 );

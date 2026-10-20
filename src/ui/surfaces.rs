@@ -192,9 +192,22 @@ pub(super) fn media_shelf<T>(
     items: &[T],
     grid: bool,
     footer: f32,
+    draw: impl FnMut(&mut egui::Ui, &T, f32),
+) {
+    media_shelf_ordered(ui, id, items, None, grid, footer, draw);
+}
+
+pub(super) fn media_shelf_ordered<T>(
+    ui: &mut egui::Ui,
+    id: &str,
+    items: &[T],
+    order: Option<&[usize]>,
+    grid: bool,
+    footer: f32,
     mut draw: impl FnMut(&mut egui::Ui, &T, f32),
 ) {
-    if items.is_empty() {
+    let count = order.map_or(items.len(), |rows| rows.len());
+    if count == 0 {
         return;
     }
     if grid {
@@ -202,7 +215,7 @@ pub(super) fn media_shelf<T>(
         let width =
             ((ui.available_width() - (columns - 1) as f32 * 12.) / columns as f32).min(220.);
         let stride = width + footer + 12.;
-        let rows = items.len().div_ceil(columns);
+        let rows = count.div_ceil(columns);
         let (_, bounds) = ui.allocate_space(vec2(ui.available_width(), rows as f32 * stride - 12.));
         let start = ((ui.clip_rect().top() - bounds.top()) / stride)
             .floor()
@@ -213,7 +226,11 @@ pub(super) fn media_shelf<T>(
             .min(rows);
         for row in start.min(rows)..end {
             for col in 0..columns {
-                let index = row * columns + col;
+                let visible = row * columns + col;
+                if visible >= count {
+                    continue;
+                }
+                let index = order.map_or(visible, |rows| rows[visible]);
                 if let Some(item) = items.get(index) {
                     let rect = egui::Rect::from_min_size(
                         bounds.min + vec2(col as f32 * (width + 12.), row as f32 * stride),
@@ -236,12 +253,16 @@ pub(super) fn media_shelf<T>(
             .id_salt(id)
             .show_viewport(ui, |ui, viewport| {
                 let (_, bounds) =
-                    ui.allocate_space(vec2(items.len() as f32 * stride - 12., width + footer));
-                let start = ((viewport.left() / stride).floor().max(0.) as usize).min(items.len());
-                let end = ((viewport.right() / stride).ceil().max(0.) as usize).min(items.len());
-                for (index, item) in items.iter().enumerate().take(end).skip(start) {
+                    ui.allocate_space(vec2(count as f32 * stride - 12., width + footer));
+                let start = ((viewport.left() / stride).floor().max(0.) as usize).min(count);
+                let end = ((viewport.right() / stride).ceil().max(0.) as usize).min(count);
+                for visible in start..end {
+                    let index = order.map_or(visible, |rows| rows[visible]);
+                    let Some(item) = items.get(index) else {
+                        continue;
+                    };
                     let rect = egui::Rect::from_min_size(
-                        bounds.min + vec2(index as f32 * stride, 0.),
+                        bounds.min + vec2(visible as f32 * stride, 0.),
                         vec2(width, width + footer),
                     );
                     let mut cell = ui.new_child(

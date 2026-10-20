@@ -27,6 +27,9 @@ struct Snapshot {
     filter: String,
     sort: track_view::Sort,
     reverse: bool,
+    card_filter: String,
+    card_sort: library_view::Sort,
+    card_reverse: bool,
     scroll: f32,
 }
 impl Snapshot {
@@ -120,6 +123,9 @@ impl App {
             filter: std::mem::take(&mut self.track_view.query),
             sort: self.track_view.sort,
             reverse: self.track_view.reverse,
+            card_filter: std::mem::take(&mut self.library_view.query),
+            card_sort: self.library_view.sort,
+            card_reverse: self.library_view.reverse,
             scroll: self.browse_cache.scroll,
         });
         self.browse_cache.ready = false;
@@ -157,6 +163,10 @@ impl App {
         self.track_view.query = snapshot.filter;
         self.track_view.sort = snapshot.sort;
         self.track_view.reverse = snapshot.reverse;
+        self.library_view = library_view::View::default();
+        self.library_view.query = snapshot.card_filter;
+        self.library_view.sort = snapshot.card_sort;
+        self.library_view.reverse = snapshot.card_reverse;
         self.browse_cache.scroll = snapshot.scroll;
         self.browse_cache.pending_scroll = Some(snapshot.scroll);
         self.browse_cache.ready = true;

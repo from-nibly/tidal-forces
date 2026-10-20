@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Saved album/artist views (v0.25.0)
+
+Library → Albums and Artists can filter and sort **loaded items only**. Albums
+match title or artist and sort by Name or Artist; artists match/sort by name.
+The hamburger beside the sort control offers Reverse and Reset. Shown/loaded
+counts disclose the scope; Load more/Load all includes further entries.
+
+These are local view changes: TIDAL saved order, raw pagination, favorites and
+playback stay unchanged. Back/Forward restores view options and scroll; fresh
+navigation resets them. Sorting keeps card actions bound to their original items.
+
 ## Unfollowing saved playlists (v0.24.0)
 
 **Playlist… → Unfollow playlist…** is offered for known saved playlists owned by
