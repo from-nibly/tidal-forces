@@ -31,6 +31,54 @@ fn items(ids: &[u64], count: usize) -> Value {
 }
 
 #[tokio::test]
+async fn earlier_position_write_uses_the_frozen_raw_backward_indices() {
+    let mut change = change();
+    change.ids = (0..205).map(|i| (i % 7 + 1) as u64).collect();
+    change.from = 204;
+    change.target = Target::Position(103);
+    let mut write = step("POST", "/v1/playlists/test-list/items/204", json!({}));
+    write.contains = vec!["toIndex=103", "if-none-match: \"revision-1\""];
+    write.etag = "\"revision-2\"";
+    let (mut api, server) = mock(vec![
+        step("GET", "/v1/playlists/test-list", metadata(205)),
+        write,
+    ]);
+    assert_eq!(
+        api.write_reorder(&change, &AtomicBool::new(false))
+            .await
+            .unwrap(),
+        "\"revision-2\""
+    );
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn forward_position_uses_the_final_index_not_a_pre_removal_offset() {
+    // python-tidal cce10953477362c4383731ad6a8f4ef6296a6168:
+    // tests/test_playlist.py::test_playlist_move_by_index asserts 0 -> 7 in nine rows.
+    // This is a local wire-contract test, not a live service test.
+    let mut change = change();
+    change.ids = (1..=9).collect();
+    change.from = 0;
+    change.target = Target::Position(7);
+    assert_eq!(change.after().unwrap(), vec![2, 3, 4, 5, 6, 7, 8, 1, 9]);
+    let mut write = step("POST", "/v1/playlists/test-list/items/0", json!({}));
+    write.contains = vec!["toIndex=7", "if-none-match: \"revision-1\""];
+    write.etag = "\"revision-2\"";
+    let (mut api, server) = mock(vec![
+        step("GET", "/v1/playlists/test-list", metadata(9)),
+        write,
+    ]);
+    assert_eq!(
+        api.write_reorder(&change, &AtomicBool::new(false))
+            .await
+            .unwrap(),
+        "\"revision-2\""
+    );
+    server.join().unwrap();
+}
+
+#[tokio::test]
 async fn reorder_reads_bounded_raw_pages_at_pinned_revisions() {
     for offset in [0, 100, 200] {
         let ids: Vec<_> = (offset..(offset + 100).min(205))

@@ -216,6 +216,17 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Precise playlist positions (v0.26.0)
+
+On a fully loaded owned playlist in Original order, **Move to position…** lets you
+enter any different one-based final position, earlier or later. Click **Move to
+position** to begin the existing paged checks and guarded move. The original four
+move actions still run immediately.
+
+Equal, out-of-range, malformed and stale destinations are rejected. The queue
+stays unchanged; uncertain outcomes require Refresh/inspection, never automatic
+retry. Drag/drop remains separate work.
+
 ## Saved album/artist views (v0.25.0)
 
 Library → Albums and Artists can filter and sort **loaded items only**. Albums

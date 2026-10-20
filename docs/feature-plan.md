@@ -1,10 +1,10 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.24.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.24.0 (`3ba5f063588c`); published managed pin `7e26f63`.
-Scoped installation used deployed-source commit `5e52ec7` on the verified prior
+**Status: v0.25.0 published and installed through standalone Home Manager.**
+Published/installed baseline: v0.25.0 (`f7747a8fd13d`); published managed pin `50ca3a6`.
+Scoped installation used deployed-source commit `3b86c6b` on the verified prior
 baseline, preserving SMAD v0.5.1 without deploying unrelated reconciled master changes.
-Approved: v0.25.0 saved album/artist view controls; publication/install in progress.
+Approved: v0.26.0 precise playlist-position moves in both directions; publication/install in progress.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +29,28 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3q slice (v0.26.0)
+
+**Move to position…** adds an explicit destination picker to fully loaded,
+owned playlists in Original order. Any different one-based final position is
+accepted, earlier or later. The picker freezes the occurrence/account/
+revision snapshot and sends nothing until **Move to position** is selected. Existing
+top/bottom/up/down actions remain immediate, without another confirmation.
+
+The selected move reuses paged source checks, one conditional insertion and exact
+paged read-back. Invalid/equal/out-of-range targets, stale scope and changed source
+data cannot dispatch. Oversized input is rejected rather than truncated into a
+different valid position. Cancellation and uncertain-result recovery retain the
+same guards; the playback queue is unchanged. Drag/drop remains separate work.
+
+Forward moves use the final zero-based index, not an adjusted pre-removal offset.
+Public python-tidal commit `cce10953477362c4383731ad6a8f4ef6296a6168`,
+`tests/test_playlist.py::test_playlist_move_by_index`, asserts that moving index 0
+to 7 in nine entries leaves that occurrence at index 7. Local wire-contract and
+paged controller tests cover both directions and retain exact read-back as the
+success gate. No live mutation tests were run; public reference tests are not
+proof of current account interoperability.
 
 ## Approved P3p slice (v0.25.0)
 

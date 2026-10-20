@@ -19,6 +19,8 @@ enum Phase {
 pub(super) struct Dialog {
     change: Move,
     expected: Vec<u64>,
+    choosing_position: bool,
+    position: String,
     generation: u64,
     operation: u64,
     title: String,
@@ -27,6 +29,23 @@ pub(super) struct Dialog {
     write_sent: bool,
     error: Option<String>,
     cancelled: Arc<AtomicBool>,
+}
+impl Dialog {
+    fn position_target(&self) -> Option<Target> {
+        // Below the widget limit: truncating an oversized paste must not turn it
+        // into a different valid destination (including long zero/space prefixes).
+        if self.position.len() > 16 {
+            return None;
+        }
+        let text = self.position.trim();
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        text.parse::<usize>()
+            .ok()
+            .filter(|p| *p > 0 && *p <= self.change.ids.len() && *p != self.change.from + 1)
+            .map(|p| Target::Position(p - 1))
+    }
 }
 impl Drop for Dialog {
     fn drop(&mut self) {
@@ -64,6 +83,16 @@ impl App {
         self.reorder_dialog.is_none() && self.reorder_page_scope().is_some()
     }
     pub(super) fn open_reorder(&mut self, from: usize, target: Target) {
+        self.begin_reorder(from, target, false);
+    }
+    pub(super) fn open_position_reorder(&mut self, from: usize) {
+        self.begin_reorder(
+            from,
+            Target::Position(if from == 0 { 1 } else { from - 1 }),
+            true,
+        );
+    }
+    fn begin_reorder(&mut self, from: usize, target: Target, choosing_position: bool) {
         if self.reorder_dialog.is_some() {
             return;
         }
@@ -95,6 +124,8 @@ impl App {
         self.reorder_dialog = Some(Dialog {
             change,
             expected,
+            choosing_position,
+            position: String::new(),
             generation: self.generation,
             operation: self.reorder_serial,
             title: self.tracks[from].title.clone(),
@@ -104,6 +135,50 @@ impl App {
             error: None,
             cancelled: Arc::new(AtomicBool::new(false)),
         });
+        self.reorder_tick();
+    }
+    fn submit_position_reorder(&mut self) {
+        if !self.reorder_scope_current() {
+            self.cancel_reorder();
+            return;
+        }
+        let Some(page) = self.reorder_page_scope() else {
+            return;
+        };
+        let Some(dialog) = &self.reorder_dialog else {
+            return;
+        };
+        if !dialog.choosing_position || dialog.busy || dialog.error.is_some() {
+            return;
+        }
+        if page.etag != dialog.change.etag
+            || !dialog.change.matches(page, &dialog.change.ids)
+            || !self
+                .tracks
+                .iter()
+                .map(|t| t.id)
+                .eq(dialog.change.ids.iter().copied())
+        {
+            self.reorder_failure(
+                "The loaded playlist changed. Refresh before choosing a position.".into(),
+            );
+            return;
+        }
+        let Some(target) = dialog.position_target() else {
+            return;
+        };
+        let dialog = self.reorder_dialog.as_mut().unwrap();
+        dialog.change.target = target;
+        match dialog.change.after() {
+            Ok(expected) => {
+                dialog.expected = expected;
+                dialog.choosing_position = false;
+            }
+            Err(error) => {
+                self.reorder_failure(error.to_string());
+                return;
+            }
+        }
         self.reorder_tick();
     }
     fn reorder_scope_current(&self) -> bool {
@@ -147,7 +222,7 @@ impl App {
             self.cancel_reorder();
             return;
         }
-        if self.buffering || self.loading {
+        if self.buffering || self.loading || dialog.choosing_position {
             return;
         }
         let request = match &dialog.phase {
@@ -345,11 +420,17 @@ impl App {
         if self.reorder_dialog.is_some() && !self.reorder_scope_current() {
             self.cancel_reorder();
         }
+        let can_choose = self.reorder_page_scope().is_some_and(|page| {
+            self.reorder_dialog
+                .as_ref()
+                .is_none_or(|d| page.etag == d.change.etag)
+        });
         let Some(dialog) = &mut self.reorder_dialog else {
             return;
         };
         let mut close = false;
         let mut refresh = false;
+        let mut submit = false;
         egui::Window::new("Reorder playlist")
             .id(egui::Id::new("playlist-reorder"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -357,17 +438,58 @@ impl App {
             .resizable(false)
             .default_width(380.)
             .show(ctx, |ui| {
-                ui.label(format!(
-                    "Moving original position {} {}.",
-                    dialog.change.from + 1,
-                    dialog.change.target.label()
-                ));
+                ui.label(if dialog.choosing_position {
+                    format!(
+                        "Choose a new position for original position {}.",
+                        dialog.change.from + 1
+                    )
+                } else if let Target::Position(position) = dialog.change.target {
+                    format!(
+                        "Moving original position {} to position {}.",
+                        dialog.change.from + 1,
+                        position + 1
+                    )
+                } else {
+                    format!(
+                        "Moving original position {} {}.",
+                        dialog.change.from + 1,
+                        dialog.change.target.label()
+                    )
+                });
                 ui.add(egui::Label::new(RichText::new(&dialog.title).strong()).truncate());
                 ui.label("This changes your TIDAL playlist, not the current playback queue.");
                 if let Some(error) = &dialog.error {
                     ui.colored_label(Color32::LIGHT_RED, error);
                     refresh = ui.button("Refresh and inspect playlist").clicked();
                     close = ui.button("Close").clicked();
+                } else if dialog.choosing_position {
+                    ui.label(format!("Final position (1–{}):", dialog.change.ids.len()));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dialog.position)
+                            .desired_width(120.)
+                            .char_limit(64),
+                    );
+                    ui.label("Positions refer to Original order, not a filtered or sorted view.");
+                    let valid = dialog.position_target().is_some();
+                    if !valid && !dialog.position.is_empty() {
+                        ui.colored_label(
+                            Color32::LIGHT_RED,
+                            "Enter a different whole-number position within the range.",
+                        );
+                    }
+                    if !can_choose {
+                        ui.label(if self.buffering {
+                            "Waiting for playback buffering…"
+                        } else {
+                            "This view is not ready. Use the unchanged, fully loaded Original-order playlist."
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        submit = ui
+                            .add_enabled(can_choose && valid, egui::Button::new("Move to position"))
+                            .clicked();
+                        close = ui.button("Cancel").clicked();
+                    });
                 } else {
                     ui.spinner();
                     match &dialog.phase {
@@ -393,6 +515,9 @@ impl App {
                     }
                 }
             });
+        if submit {
+            self.submit_position_reorder();
+        }
         if close || refresh {
             self.cancel_reorder();
         }

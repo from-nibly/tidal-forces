@@ -43,6 +43,150 @@ fn checked(app: &mut App, request: Request, ids: &[u64], offset: usize, etag: &s
     );
 }
 #[test]
+fn position_picker_is_inert_until_a_valid_destination_and_explicit_submit() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    app.open_position_reorder(204);
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+    for position in [
+        "0",
+        "205",
+        "206",
+        "-1",
+        "1.5",
+        "+2",
+        "9999999999999999999999999999999999",
+        "00000000000000000000000000000004",
+        "",
+    ] {
+        app.reorder_dialog.as_mut().unwrap().position = position.into();
+        app.submit_position_reorder();
+        assert!(requests.try_recv().is_err());
+        assert!(app.reorder_dialog.as_ref().unwrap().choosing_position);
+    }
+    app.reorder_dialog.as_mut().unwrap().position = "104".into();
+    app.submit_position_reorder();
+    app.submit_position_reorder();
+    assert!(matches!(requests.try_recv(),Ok(Request::CheckReorder{check,..}) if check.offset==0));
+    assert!(requests.try_recv().is_err());
+    let dialog = app.reorder_dialog.as_ref().unwrap();
+    assert_eq!(dialog.change.target, Target::Position(103));
+    assert!(!dialog.choosing_position);
+}
+#[test]
+fn position_picker_rejects_changed_scope_or_source_before_dispatch() {
+    for case in 0..5 {
+        let (_, mut app, _events, mut requests) = fixture();
+        prepare(&mut app, 205);
+        app.open_position_reorder(204);
+        app.reorder_dialog.as_mut().unwrap().position = "1".into();
+        match case {
+            0 => app.account = Some(8),
+            1 => app.generation += 1,
+            2 => app.track_view.reverse = true,
+            3 => app.playlist_page.as_mut().unwrap().etag = "changed".into(),
+            _ => app.tracks[0].id = 99,
+        }
+        app.submit_position_reorder();
+        assert!(requests.try_recv().is_err());
+    }
+}
+#[test]
+fn positions_complete_paged_verification_in_both_directions_without_changing_queue() {
+    for (from, to) in [(204, 103), (0, 103), (103, 204), (204, 0)] {
+        let (_, mut app, _events, mut requests) = fixture();
+        prepare(&mut app, 205);
+        let original: Vec<_> = app.tracks.iter().map(|t| t.id).collect();
+        let queue = app.queue.revision();
+        app.open_position_reorder(from);
+        app.reorder_dialog.as_mut().unwrap().position = (to + 1).to_string();
+        app.submit_position_reorder();
+        let expected = app.reorder_dialog.as_ref().unwrap().expected.clone();
+        for offset in [0, 100, 200] {
+            if offset > 0 {
+                app.reorder_tick();
+            }
+            checked(
+                &mut app,
+                requests.try_recv().unwrap(),
+                &original,
+                offset,
+                "revision-1",
+            );
+        }
+        app.reorder_tick();
+        let Request::ReorderPlaylist {
+            operation, change, ..
+        } = requests.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(change.indices().unwrap(), (from, to));
+        app.reorder_result(7, operation, "fixture-list".into(), Ok("revision-2".into()));
+        for offset in [0, 100, 200] {
+            app.reorder_tick();
+            checked(
+                &mut app,
+                requests.try_recv().unwrap(),
+                &expected,
+                offset,
+                "revision-2",
+            );
+        }
+        assert!(app.reorder_dialog.is_none());
+        assert_eq!(app.queue.revision(), queue);
+        assert_eq!(
+            app.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn wrong_forward_readback_never_reports_success_or_retries() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    let original: Vec<_> = app.tracks.iter().map(|t| t.id).collect();
+    app.open_position_reorder(0);
+    app.reorder_dialog.as_mut().unwrap().position = "104".into();
+    app.submit_position_reorder();
+    for offset in [0, 100, 200] {
+        if offset > 0 {
+            app.reorder_tick();
+        }
+        checked(
+            &mut app,
+            requests.try_recv().unwrap(),
+            &original,
+            offset,
+            "revision-1",
+        );
+    }
+    app.reorder_tick();
+    let Request::ReorderPlaylist { operation, .. } = requests.try_recv().unwrap() else {
+        panic!()
+    };
+    app.reorder_result(7, operation, "fixture-list".into(), Ok("revision-2".into()));
+    app.reorder_tick();
+    checked(
+        &mut app,
+        requests.try_recv().unwrap(),
+        &original,
+        0,
+        "revision-2",
+    );
+    assert!(app.reorder_dialog.as_ref().unwrap().error.is_some());
+    assert!(!app.browse_cache.ready);
+    assert_eq!(
+        app.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+        original
+    );
+    app.reorder_tick();
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn paged_preflight_single_write_and_full_readback_preserve_loaded_view_and_queue() {
     let (_, mut app, _events, mut requests) = fixture();
     prepare(&mut app, 205);
@@ -373,6 +517,39 @@ fn label(output: &egui::FullOutput, value: &str) -> egui::Pos2 {
         })
         .unwrap()
 }
+#[test]
+fn position_menu_opens_for_each_row_then_one_click_starts_checks() {
+    for from in 0..3 {
+        let (ctx, mut app, _events, mut requests) = fixture();
+        prepare(&mut app, 3);
+        let _ = draw(&ctx, &mut app, vec![]);
+        let output = draw(&ctx, &mut app, vec![]);
+        let more = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Circle(c) if c.radius == 1.25 => Some(c.center),
+                _ => None,
+            })
+            .nth(from * 3)
+            .unwrap();
+        click(&ctx, &mut app, more);
+        let output = draw(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, label(&output, "Move to position…"));
+        assert!(app.reorder_dialog.as_ref().unwrap().choosing_position);
+        assert!(requests.try_recv().is_err());
+        app.reorder_dialog.as_mut().unwrap().position = if from == 0 { "3" } else { "1" }.into();
+        let _ = draw(&ctx, &mut app, vec![]);
+        let output = draw(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, label(&output, "Move to position"));
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(Request::CheckReorder { .. })
+        ));
+        assert!(requests.try_recv().is_err());
+    }
+}
+
 #[test]
 fn menu_actions_begin_checks_immediately_without_confirmation_or_double_dispatch() {
     for (action, target, from) in [

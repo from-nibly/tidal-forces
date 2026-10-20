@@ -18,6 +18,7 @@ pub enum Target {
     Up,
     Down,
     Bottom,
+    Position(usize),
 }
 impl Target {
     pub fn label(self) -> &'static str {
@@ -26,6 +27,7 @@ impl Target {
             Self::Up => "up one position",
             Self::Down => "down one position",
             Self::Bottom => "to the bottom",
+            Self::Position(_) => "to the selected position",
         }
     }
 }
@@ -57,8 +59,9 @@ impl Move {
             match self.target {
                 Target::Top | Target::Up => self.from > 0,
                 Target::Bottom | Target::Down => self.from + 1 < self.ids.len(),
+                Target::Position(position) => position < self.ids.len() && position != self.from,
             },
-            "The track is already at that end"
+            "The target is not a valid different playlist position"
         );
         Ok(match self.target {
             Target::Top => (self.from, 0),
@@ -66,6 +69,7 @@ impl Move {
             // Moving the next occurrence before this one avoids ambiguous forward-insertion offsets.
             Target::Down => (self.from + 1, self.from),
             Target::Bottom => (self.from, self.ids.len()),
+            Target::Position(position) => (self.from, position),
         })
     }
     pub fn after(&self) -> Result<Vec<u64>> {
@@ -94,6 +98,45 @@ impl Move {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn positions_are_exact_final_indices_in_both_directions() {
+        for len in 2..=50 {
+            for from in 0..len {
+                for position in 0..len {
+                    if position == from {
+                        continue;
+                    }
+                    let change = Move {
+                        user: 7,
+                        id: "fixture".into(),
+                        etag: "revision".into(),
+                        ids: (0..len).map(|i| (i % 7 + 1) as u64).collect(),
+                        from,
+                        target: Target::Position(position),
+                    };
+                    assert_eq!(change.indices().unwrap(), (from, position));
+                    let mut expected = change.ids.clone();
+                    let item = expected.remove(from);
+                    expected.insert(position, item);
+                    assert_eq!(change.after().unwrap(), expected);
+                }
+            }
+        }
+        let mut change = Move {
+            user: 7,
+            id: "fixture".into(),
+            etag: "revision".into(),
+            ids: vec![1; MAX_TRACKS],
+            from: MAX_TRACKS - 1,
+            target: Target::Position(100),
+        };
+        assert_eq!(change.indices().unwrap(), (MAX_TRACKS - 1, 100));
+        for position in [MAX_TRACKS - 1, MAX_TRACKS, usize::MAX] {
+            change.target = Target::Position(position);
+            assert!(change.after().is_err());
+        }
+    }
+
     #[test]
     fn adjacent_moves_are_exact_swaps_and_never_use_forward_insertion() {
         for len in 2..=100 {

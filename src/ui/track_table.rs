@@ -258,6 +258,7 @@ impl App {
         let mut radio = None;
         let mut remove = None;
         let mut reorder = None;
+        let mut position_move = None;
         let reorderable = self.can_reorder_playlist();
         let mut favorite = None;
         let removable = !self.loading
@@ -554,6 +555,9 @@ impl App {
                         let within_bounds = match target {
                             Target::Top | Target::Up => i > 0,
                             Target::Down | Target::Bottom => i + 1 < self.tracks.len(),
+                            Target::Position(position) => {
+                                position < self.tracks.len() && position != i
+                            }
                         };
                         if ui
                             .add_enabled(reorderable && within_bounds, egui::Button::new(label))
@@ -563,6 +567,14 @@ impl App {
                             reorder = Some((i, target));
                             ui.close();
                         }
+                    }
+                    if ui
+                        .add_enabled(reorderable, egui::Button::new("Move to position…"))
+                        .on_disabled_hover_text(help)
+                        .clicked()
+                    {
+                        position_move = Some(i);
+                        ui.close();
                     }
                 }
                 if removable && ui.button("Remove from this playlist…").clicked() {
@@ -688,6 +700,9 @@ impl App {
         }
         if let Some((from, target)) = reorder {
             self.open_reorder(from, target);
+        }
+        if let Some(from) = position_move {
+            self.open_position_reorder(from);
         }
         if let Some(i) = remove
             && let Some(page) = &self.playlist_page
