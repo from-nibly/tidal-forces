@@ -68,7 +68,7 @@ pub struct Playlist {
 impl Playlist {
     pub fn is_known_non_owned(&self, user: u64) -> bool {
         user != 0
-            && !self.creator.as_ref().is_some_and(|c| c.id == user)
+            && self.creator.as_ref().is_none_or(|c| c.id != user)
             && (self.kind == "EDITORIAL"
                 || (self.kind == "USER" && self.creator.as_ref().is_some_and(|c| c.id != 0)))
     }

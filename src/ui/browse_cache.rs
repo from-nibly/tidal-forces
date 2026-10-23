@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::VecDeque;
 
+mod persistent;
+
 const MAX_VIEWS: usize = 8;
 const MAX_ROWS: usize = 50_000;
 
@@ -12,8 +14,13 @@ pub(super) struct Cache {
     pub restored: bool,
     pub scroll: f32,
     pub pending_scroll: Option<f32>,
+    pub persisted: bool,
+    disk_serial: u64,
+    disk_loaded: Option<u64>,
+    disk_status: String,
 }
 struct Snapshot {
+    persisted: bool,
     location: Location,
     tracks: Vec<Track>,
     albums: Vec<Album>,
@@ -54,27 +61,42 @@ fn same_location(a: &Location, b: &Location) -> bool {
 }
 impl App {
     pub(super) fn invalidate_browse_cache(&mut self) {
+        let same_account = self.browse_cache.owner == self.account;
+        if !same_account {
+            self.browse_cache.disk_loaded = None;
+        }
+        self.browse_cache.disk_serial = self.browse_cache.disk_serial.wrapping_add(1);
         self.library_load = None;
         self.album_load = None;
         self.browse_cache.entries.clear();
         if self.browse_cache.owner != self.account || !self.connected {
             self.browse_cache.restored = false;
+            self.browse_cache.persisted = false;
         }
         self.browse_cache.owner = self.account;
         self.browse_cache.ready = false;
+        if same_account && self.connected {
+            self.browse_cache.disk_loaded = self.account;
+            self.persist_metadata(false);
+        }
     }
     pub(super) fn browse_loaded(&mut self) {
         if self.browse_cache.owner != self.account {
             self.invalidate_browse_cache();
         }
         self.browse_cache.ready = true;
+        self.browse_cache.persisted = false;
     }
     pub(super) fn fresh_browse_read(&mut self) {
         let location = self.location();
+        let before = self.browse_cache.entries.len();
         self.browse_cache
             .entries
             .retain(|entry| !same_location(&entry.location, &location));
         self.browse_cache.ready = false;
+        if before != self.browse_cache.entries.len() || self.browse_cache.persisted {
+            self.persist_metadata(false);
+        }
     }
     pub(super) fn save_browse_view(&mut self) {
         if !self.connected
@@ -110,6 +132,7 @@ impl App {
             .sync(self.account, self.generation, self.tracks.len());
         self.sync_track_view();
         self.browse_cache.entries.push_back(Snapshot {
+            persisted: self.browse_cache.persisted,
             location,
             tracks: std::mem::take(&mut self.tracks),
             albums: std::mem::take(&mut self.albums),
@@ -129,6 +152,7 @@ impl App {
             scroll: self.browse_cache.scroll,
         });
         self.browse_cache.ready = false;
+        self.persist_metadata(false);
     }
     pub(super) fn restore_browse_view(&mut self, location: &Location) -> bool {
         if !self.connected || self.browse_cache.owner != self.account {
@@ -144,6 +168,7 @@ impl App {
             return false;
         };
         let snapshot = self.browse_cache.entries.remove(index).unwrap();
+        self.browse_cache.persisted = snapshot.persisted;
         self.page = snapshot.location.page;
         self.tracks = snapshot.tracks;
         self.albums = snapshot.albums;

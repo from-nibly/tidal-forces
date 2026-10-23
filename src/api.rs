@@ -28,6 +28,8 @@ pub struct Api {
     pub credentials: crate::credentials::Store,
     pub credential_warning: Option<String>,
     pub credentials_dirty: bool,
+    #[cfg(test)]
+    prohibit_refresh: bool,
     client_id: String,
     client_secret: String,
 }
@@ -75,6 +77,8 @@ impl Api {
             credentials: crate::credentials::Store::new()?,
             credential_warning: None,
             credentials_dirty: false,
+            #[cfg(test)]
+            prohibit_refresh: false,
             client_id: std::env::var("TIDAL_CLIENT_ID").unwrap_or_else(|_| CLIENT_ID.into()),
             client_secret: std::env::var("TIDAL_CLIENT_SECRET")
                 .unwrap_or_else(|_| CLIENT_SECRET.into()),
@@ -195,6 +199,11 @@ impl Api {
     }
 
     async fn refresh(&mut self) -> Result<()> {
+        #[cfg(test)]
+        anyhow::ensure!(
+            !self.prohibit_refresh,
+            "This isolated probe requires a fresh session; it cannot renew credentials"
+        );
         let session = self.session.as_ref().context("Sign in to TIDAL first")?;
         let (client_id, client_secret) = if session.pkce {
             (crate::auth::PKCE_CLIENT_ID, crate::auth::PKCE_CLIENT_SECRET)
@@ -1148,7 +1157,7 @@ impl Api {
             )
             .await;
         if cancelled.load(Ordering::Acquire)
-            || !self.session.as_ref().is_some_and(|s| s.user_id == user)
+            || self.session.as_ref().is_none_or(|s| s.user_id != user)
         {
             bail!("Unfollow may have completed. Refresh and inspect before trying again.");
         }
@@ -1363,6 +1372,9 @@ impl Api {
         parse_stream(&v)
     }
 }
+
+#[path = "folder_api.rs"]
+mod folder_api;
 
 #[cfg(test)]
 #[path = "context_tests.rs"]

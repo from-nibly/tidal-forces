@@ -259,6 +259,8 @@ impl App {
         let mut remove = None;
         let mut reorder = None;
         let mut position_move = None;
+        let mut drop_move = None;
+        self.playlist_drag_scroll(ui);
         let reorderable = self.can_reorder_playlist();
         let mut favorite = None;
         let removable = !self.loading
@@ -423,7 +425,27 @@ impl App {
                 );
             }
             table_focused |= response.has_focus() || check.has_focus();
-            if playing {
+            let grip = reorderable.then(|| {
+                let grip = ui.interact(
+                    egui::Rect::from_center_size(pos2(rect.left()+44., rect.center().y), vec2(24., height-12.)),
+                    id.with(("playlist-grip", self.account, self.generation, self.playlist_page.as_ref().map(|p| &p.etag), i)),
+                    egui::Sense::drag(),
+                );
+                if grip.drag_started() && let Some(drag) = self.playlist_drag(i) { grip.dnd_set_drag_payload(drag); }
+                grip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Reorder playlist occurrence {}; Move to position is also available", i+1)));
+                grip.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(format!("Drag original position {} to reorder this playlist. Move to position… also works.", i+1))
+            });
+            if grip.as_ref().is_some_and(|g| g.hovered() || g.dragged()) {
+                for x in [-3., 3.] {
+                    for y in [-5., 0., 5.] {
+                        ui.painter().circle_filled(
+                            pos2(rect.left() + 44. + x, rect.center().y + y),
+                            1.5,
+                            ACCENT,
+                        );
+                    }
+                }
+            } else if playing {
                 ui.painter().rect_filled(
                     egui::Rect::from_min_size(
                         rect.left_top() + vec2(0., 10.),
@@ -450,6 +472,24 @@ impl App {
             }
             ui.painter()
                 .hline(rect.x_range(), rect.bottom(), Stroke::new(0.5_f32, BORDER));
+            if let Some(drag) = response.dnd_hover_payload::<playlist_drag::Drag>() {
+                let after = ui.input(|input| {
+                    input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|p| p.y >= rect.center().y)
+                });
+                if let Some(target) = self.playlist_drop_position(&drag, i, after) {
+                    ui.painter().hline(
+                        rect.x_range(),
+                        if after { rect.bottom() } else { rect.top() },
+                        Stroke::new(2.0_f32, ACCENT),
+                    );
+                    if let Some(drag) = response.dnd_release_payload::<playlist_drag::Drag>() {
+                        drop_move = Some((drag, target));
+                    }
+                }
+            }
             if response.has_focus() {
                 ui.painter().rect_stroke(
                     rect,
@@ -703,6 +743,9 @@ impl App {
         }
         if let Some(from) = position_move {
             self.open_position_reorder(from);
+        }
+        if let Some((drag, target)) = drop_move {
+            self.drop_playlist(&drag, target);
         }
         if let Some(i) = remove
             && let Some(page) = &self.playlist_page

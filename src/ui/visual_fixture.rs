@@ -34,7 +34,12 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "pins-library",
             "reorder",
             "reorder-large",
-            "reorder-position"
+            "reorder-position",
+            "folder-create",
+            "folder-rename",
+            "folder-move",
+            "cache-settings",
+            "cached-playlist"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -287,7 +292,12 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             .observe(Favorite::new(FavoriteKind::Tracks, id));
     }
     app.page = match page {
-        "pins-library" => Page::Playlists,
+        "pins-library" | "folder-create" | "folder-rename" | "folder-move" => Page::Playlists,
+        "cache-settings" => {
+            app.settings_section = SettingsSection::Privacy;
+            app.artwork_cache = Some(crate::artwork_cache::ArtworkCache::fixture());
+            Page::Settings
+        }
         "privacy" => {
             app.settings_section = SettingsSection::Privacy;
             Page::Settings
@@ -373,6 +383,34 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         pins.toggle("fixture-0", "Night drives").unwrap();
         pins.toggle("fixture-2", "Late hours").unwrap();
         app.pins = Some(pins);
+    }
+    if page == "folder-create" {
+        app.new_folder();
+    }
+    if page == "folder-rename" {
+        app.open_folder_edit(crate::folders::Change::Rename {
+            folder: crate::folders::Folder {
+                id: "folder-fixture".into(),
+                parent: Some("root".into()),
+                name: "Night rotation".into(),
+            },
+            name: "Night rotation".into(),
+        });
+    }
+    if page == "folder-move" {
+        app.open_folder_edit(crate::folders::Change::MovePlaylist {
+            id: "fixture-0".into(),
+            title: "Night drives".into(),
+            source: "root".into(),
+            destination: crate::folders::Folder::root(),
+        });
+    }
+    if page == "cached-playlist" {
+        app.browse_loaded();
+        app.browse_cache.persisted = true;
+        app.browse_cache.restored = true;
+        app.playlist_page = None;
+        app.more = false;
     }
     if matches!(page, "reorder" | "reorder-large" | "reorder-position") {
         if matches!(page, "reorder-large" | "reorder-position") {

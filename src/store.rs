@@ -65,6 +65,8 @@ pub struct Appearance {
     pub player_bar_visualizer: crate::visualizer::Mode,
     pub compact_rows: bool,
     pub zoom: f32,
+    pub metadata_cache: bool,
+    pub artwork_cache: bool,
 }
 impl Default for Appearance {
     fn default() -> Self {
@@ -72,6 +74,8 @@ impl Default for Appearance {
             player_bar_visualizer: crate::visualizer::Mode::Off,
             compact_rows: false,
             zoom: 1.,
+            metadata_cache: false,
+            artwork_cache: false,
         }
     }
 }

@@ -149,6 +149,16 @@ fn save(root: &Path, state: &PlaybackState) -> Result<()> {
 }
 
 pub enum Event {
+    CacheLoaded {
+        user: u64,
+        request: u64,
+        result: std::result::Result<crate::metadata_cache::Record, String>,
+    },
+    CacheSaved {
+        user: u64,
+        request: u64,
+        result: std::result::Result<(), String>,
+    },
     HistoryLoaded {
         user: u64,
         request: u64,
@@ -180,6 +190,8 @@ struct Pending {
     load: Option<(u64, u64)>,
     histories: HashMap<u64, crate::history::History>,
     history_load: Option<(u64, u64)>,
+    caches: HashMap<u64, (u64, crate::metadata_cache::Record)>,
+    cache_load: Option<(u64, u64)>,
     shutdown: bool,
 }
 
@@ -198,11 +210,11 @@ impl StateStore {
         let worker = thread::Builder::new().name("tidal-state".into()).spawn(move || {
             let mut cached: Option<PlaybackState> = None;
             loop {
-                let (updates, request, histories, history_request, shutdown) = {
+                let (updates, request, histories, history_request, caches, cache_request, shutdown) = {
                     let (lock, wake) = &*pending;
                     let mut work = lock.lock().unwrap();
-                    while work.updates.is_empty() && work.load.is_none() && work.histories.is_empty() && work.history_load.is_none() && !work.shutdown { work = wake.wait(work).unwrap(); }
-                    (std::mem::take(&mut work.updates), work.load.take(), std::mem::take(&mut work.histories), work.history_load.take(), work.shutdown)
+                    while work.updates.is_empty() && work.load.is_none() && work.histories.is_empty() && work.history_load.is_none() && work.caches.is_empty() && work.cache_load.is_none() && !work.shutdown { work = wake.wait(work).unwrap(); }
+                    (std::mem::take(&mut work.updates), work.load.take(), std::mem::take(&mut work.histories), work.history_load.take(), std::mem::take(&mut work.caches), work.cache_load.take(), work.shutdown)
                 };
                 for (user, update) in updates {
                     if let Some(state) = update.snapshot { cached = Some(state); }
@@ -227,6 +239,14 @@ impl StateStore {
                     let _ = tx.send(Event::HistoryLoaded { user, request, result });
                     ctx.request_repaint();
                 }
+                for (user,(request,record)) in caches {
+                    let result=crate::metadata_cache::save(&root,record).map_err(|_|"Could not save metadata cache; stored snapshots may be stale.".into());
+                    let _=tx.send(Event::CacheSaved {user,request,result});ctx.request_repaint();
+                }
+                if let Some((user,request))=cache_request {
+                    let result=crate::metadata_cache::load(&root,user).map_err(|_|"Could not load metadata cache. Refresh views or clear cached metadata.".into());
+                    let _=tx.send(Event::CacheLoaded {user,request,result});ctx.request_repaint();
+                }
                 if let Some((user, request)) = request {
                     let result = load(&root, user);
                     cached = match &result {
@@ -245,6 +265,21 @@ impl StateStore {
             events,
             worker: Some(worker),
         })
+    }
+    pub fn load_cache(&self, user: u64, request: u64) {
+        let (lock, wake) = &*self.shared;
+        lock.lock().unwrap().cache_load = Some((user, request));
+        wake.notify_one();
+    }
+    pub fn cache(&self, request: u64, record: crate::metadata_cache::Record) -> bool {
+        let (lock, wake) = &*self.shared;
+        let mut work = lock.lock().unwrap();
+        if work.caches.len() >= 4 && !work.caches.contains_key(&record.user) {
+            return false;
+        }
+        work.caches.insert(record.user, (request, record));
+        wake.notify_one();
+        true
     }
     pub fn load_history(&self, user: u64, request: u64) {
         let (lock, wake) = &*self.shared;

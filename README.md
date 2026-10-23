@@ -216,6 +216,33 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Organization bundle (v0.27.0)
+
+- **Long-pause resume:** after a pause of at least one minute, Play obtains a
+  fresh authorized stream and prepares the same track position before playback.
+  Short pauses retain the existing stream. Early stream failures remain paused;
+  Play retries at the stopped position rather than restarting or skipping tracks.
+  This conservative idle policy does not assume a particular signed-URL lifetime.
+- **Playlist drag-and-drop:** drag a row's number/grip in a fully loaded owned
+  playlist in Original order. Insertion markers and edge scrolling help place it;
+  **Move to position…** remains the keyboard/menu alternative. A drop uses the
+  same account/revision checks and exact read-back, without changing the queue.
+- **Persistent caches:** Settings → Library & Privacy has separate, off-by-default
+  metadata and artwork controls. Metadata snapshots are private per account and
+  bounded to 8 views / 10,000 rows / 8 MiB; disk restores require Refresh before
+  playlist editing or further loading. Artwork is bounded to 128 files / 64 MiB
+  and accepts only unsigned TIDAL image URLs. Clear controls are separate from
+  credentials, playback snapshots and audio. Disabling retains existing cache files.
+- **Folder organization:** Library → Playlists has **New folder…**. Right-click
+  (or Shift+F10 on a focused row) to rename a folder or move a playlist. Creation
+  is root-only; destination folders must have unique names. Source/read-back checks
+  are bounded; folder revisions are unavailable, so concurrent changes can race.
+  Uncertain outcomes require Refresh rather than automatic retry.
+
+Root creation, rename, playlist moves and temporary-object cleanup passed an
+explicitly authorized live test. Nested creation, folder deletion and cover
+editing remain unavailable; see [folder validation](docs/folder-validation.md).
+
 ## Precise playlist positions (v0.26.0)
 
 On a fully loaded owned playlist in Original order, **Move to position…** lets you
@@ -283,9 +310,9 @@ apply. Your existing playback queue stays unchanged.
 
 A track's menu offers **Move to playlist top / bottom**. Selecting an action
 moves the track immediately, without an extra confirmation. This
-initial slice supports fully loaded, owned playlists of 2–100 available tracks,
-without videos, in Original order with no filter/reverse applied. Larger playlists
-and middle-position/drag moves remain future work.
+initial slice supported 2–100 available tracks. Later releases expanded this to
+50,000 fully loaded tracks and exact positions; v0.27 adds drag/drop. Owned
+playlists still require Original order without filtering, reverse or video holes.
 
 Moves target the selected raw occurrence, including duplicate songs, and verify
 the complete source and resulting order at pinned revisions. Uncertain results
@@ -300,7 +327,8 @@ windows. Each pin's menu moves it up/down or removes it. This does not change
 TIDAL favorites, folder order, queue or playback.
 
 Up to 64 IDs and last-known labels are saved privately per account. Opening a pin
-uses fresh authorized browsing, not an offline playlist copy. Signing out hides
+normally fetches fresh data. With opt-in metadata persistence, it may display a
+marked saved snapshot; Refresh restores current data and editing authority. Signing out hides
 that account's pins without deleting them; unreadable pin files are preserved.
 
 ## Full album loading (v0.17.0)
@@ -337,12 +365,14 @@ including filter/sort options, occurrence-based selection and scroll position.
 This does not restart playback or replace the queue. A **Restored view** label
 identifies cached data; **Refresh** fetches the latest changes.
 
-The memory-only cache holds at most eight views and 50,000 table rows for the
+The in-memory cache holds at most eight views and 50,000 table rows for the
 current account. Account changes and local favorite/playlist writes invalidate it.
 In-flight, failed, oversized or evicted views reload normally; Home, Settings and
-folder views retain their existing behavior. Fresh page/link navigation still
-fetches data. Cached playlist pagination and edits retain their original raw-index
-and revision guards. Favorite membership is not rolled back with browse data.
+folder views retain their existing behavior. Without persistence enabled, fresh
+page/link navigation fetches data. In-memory playlist snapshots retain their
+raw-index and revision guards. Optional v0.27 disk snapshots have stricter
+limits and no restored editing authority or pagination; track/radio autoplay
+links still fetch fresh data. Favorite membership is never inferred from disk.
 
 ## Favorite status prefetch (v0.13.0)
 
@@ -696,9 +726,9 @@ reqwest/rustls, Tokio, roxmltree, souvlaki/zbus, FDK AAC and Inter fonts. Inter 
 Andersson, under SIL OFL (`assets/fonts/OFL.txt`). No Spotifast source or artwork
 is bundled.
 
-Not yet included: playlist reordering/renaming/deletion, folder editing,
-lyrics, offline downloads, TIDAL
-Connect, infinite radio, gapless track transitions, tray icon or built-in updater.
+Not yet included: nested-folder creation, folder deletion, playlist-cover editing,
+lyrics, offline audio downloads, TIDAL Connect, infinite radio, gapless track
+transitions, tray icon or built-in updater.
 
 The Rust application is MIT licensed; the bundled AAC codec and fonts retain
 their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md), run `--licenses` for the

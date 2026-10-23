@@ -54,7 +54,7 @@ impl App {
         };
         (self.connected && self.browse_cache.owner == Some(user) && self.browse_cache.ready
             && !self.loading && !self.buffering && !self.playlist_busy
-            && self.metadata_editor.is_none() && self.reorder_dialog.is_none()
+            && self.metadata_editor.is_none() && self.reorder_dialog.is_none() && self.folder_dialog.is_none()
             && eligible && !page.playlist.title.trim().is_empty() && !page.etag.trim().is_empty()
             && matches!(&self.page, Page::Collection {kind,id,..} if kind=="playlists" && id==&page.playlist.uuid))
             .then_some(page)

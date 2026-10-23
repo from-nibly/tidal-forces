@@ -43,6 +43,121 @@ fn checked(app: &mut App, request: Request, ids: &[u64], offset: usize, etag: &s
     );
 }
 #[test]
+fn playlist_drag_boundaries_and_stale_snapshots_are_guarded() {
+    let (_, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    let drag = app.playlist_drag(0).unwrap();
+    assert_eq!(app.playlist_drop_position(&drag, 0, false), None);
+    assert_eq!(app.playlist_drop_position(&drag, 0, true), None);
+    assert_eq!(app.playlist_drop_position(&drag, 103, true), Some(103));
+    assert_eq!(app.playlist_drop_position(&drag, 204, true), Some(204));
+    assert_eq!(app.playlist_drop_position(&drag, 205, true), None);
+    app.tracks[1].id = 99;
+    app.drop_playlist(&drag, 103);
+    assert!(requests.try_recv().is_err());
+    for case in 0..5 {
+        let (_, mut app, _events, mut requests) = fixture();
+        prepare(&mut app, 205);
+        let drag = app.playlist_drag(204).unwrap();
+        assert_eq!(app.playlist_drop_position(&drag, 0, false), Some(0));
+        match case {
+            0 => app.account = Some(8),
+            1 => app.generation += 1,
+            2 => app.track_view.reverse = true,
+            3 => app.playlist_page.as_mut().unwrap().etag = "changed".into(),
+            _ => app.invalidate_browse_cache(),
+        }
+        app.drop_playlist(&drag, 0);
+        assert!(requests.try_recv().is_err());
+    }
+}
+
+#[test]
+fn dragging_a_playlist_grip_dispatches_only_on_drop_and_never_plays() {
+    let (ctx, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 3);
+    let queue = app.queue.revision();
+    let _ = draw(&ctx, &mut app, vec![]);
+    let output = draw(&ctx, &mut app, vec![]);
+    let source = label(&output, "2");
+    let target = label(&output, "3") + vec2(200., 20.);
+    let _ = draw(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(source),
+            egui::Event::PointerButton {
+                pos: source,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let _ = draw(
+        &ctx,
+        &mut app,
+        vec![egui::Event::PointerMoved(source + vec2(15., 0.))],
+    );
+    assert!(egui::DragAndDrop::has_payload_of_type::<playlist_drag::Drag>(&ctx));
+    assert!(requests.try_recv().is_err());
+    let _ = draw(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
+    let _ = draw(
+        &ctx,
+        &mut app,
+        vec![egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Request::CheckReorder { .. })
+    ));
+    assert!(requests.try_recv().is_err());
+    assert_eq!(app.queue.revision(), queue);
+    let dialog = app.reorder_dialog.as_ref().unwrap();
+    assert_eq!(dialog.change.from, 1);
+    assert_eq!(dialog.change.target, Target::Position(2));
+}
+
+#[test]
+fn playlist_drag_scrolls_at_viewport_edges_without_dispatching() {
+    let (ctx, mut app, _events, mut requests) = fixture();
+    prepare(&mut app, 205);
+    egui::DragAndDrop::set_payload(&ctx, app.playlist_drag(0).unwrap());
+    let mut offset = 0.;
+    for _ in 0..24 {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(300., 250.),
+                )),
+                events: vec![egui::Event::PointerMoved(pos2(150., 235.))],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    offset = egui::ScrollArea::vertical()
+                        .show(ui, |ui| {
+                            app.playlist_drag_scroll(ui);
+                            ui.allocate_space(vec2(200., 3000.));
+                        })
+                        .state
+                        .offset
+                        .y;
+                });
+            },
+        );
+    }
+    assert!(offset > 0.);
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn position_picker_is_inert_until_a_valid_destination_and_explicit_submit() {
     let (_, mut app, _events, mut requests) = fixture();
     prepare(&mut app, 205);

@@ -2,6 +2,106 @@ use super::*;
 use crate::ui::tests::{fixture, track};
 
 #[test]
+fn disk_snapshot_survives_restart_without_restoring_write_authority_or_pagination() {
+    use crate::metadata_cache::{Record, Snapshot as DiskSnapshot};
+    let root = tempfile::tempdir().unwrap();
+    let location = Location {
+        page: Page::Collection {
+            kind: "playlists".into(),
+            id: "test-list".into(),
+            title: "Fixture".into(),
+        },
+        query: String::new(),
+    };
+    crate::metadata_cache::save(
+        root.path(),
+        Record::new(
+            7,
+            vec![DiskSnapshot {
+                location: location.clone(),
+                tracks: vec![track(1), track(1)],
+                albums: vec![],
+                artists: vec![],
+            }],
+        ),
+    )
+    .unwrap();
+    let (ctx, mut app, _events, mut requests) = fixture();
+    app.appearance.metadata_cache = true;
+    app.browse_loaded();
+    app.state_store = Some(StateStore::new(root.path().into(), ctx).unwrap());
+    // Startup's fresh Home read must not overwrite the disk cache before loading it.
+    app.fresh_browse_read();
+    app.load_metadata_cache();
+    let crate::player_state::Event::CacheLoaded {
+        user,
+        request,
+        result,
+    } = app
+        .state_store
+        .as_ref()
+        .unwrap()
+        .events
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+    else {
+        panic!()
+    };
+    app.metadata_cache_loaded(user, request, result);
+    let queue = app.queue.revision();
+    app.navigate(location.page);
+    assert!(app.browse_cache.persisted);
+    assert!(app.browse_cache.restored);
+    assert_eq!(app.tracks.len(), 2);
+    assert!(app.playlist_page.is_none());
+    assert!(!app.more);
+    assert!(!app.can_reorder_playlist());
+    assert!(!app.library_read_valid);
+    assert_eq!(app.queue.revision(), queue);
+    assert!(requests.try_recv().is_err());
+    app.load_page(0);
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Request::Playlist {
+            offset: 0,
+            etag: None,
+            ..
+        })
+    ));
+    drop(app.state_store.take());
+    assert!(
+        crate::metadata_cache::load(root.path(), 7)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+}
+#[test]
+fn late_disk_loads_cannot_cross_accounts_or_restore_invalidated_snapshots() {
+    use crate::metadata_cache::{Record, Snapshot as DiskSnapshot};
+    let (_, mut app, _events, _requests) = fixture();
+    app.appearance.metadata_cache = true;
+    app.browse_loaded();
+    let request = app.browse_cache.disk_serial;
+    let snapshot = || DiskSnapshot {
+        location: Location {
+            page: Page::Track(1),
+            query: String::new(),
+        },
+        tracks: vec![track(1)],
+        albums: vec![],
+        artists: vec![],
+    };
+    app.invalidate_browse_cache();
+    app.metadata_cache_loaded(7, request, Ok(Record::new(7, vec![snapshot()])));
+    assert!(app.browse_cache.entries.is_empty());
+    app.account = Some(8);
+    let request = app.browse_cache.disk_serial;
+    app.metadata_cache_loaded(7, request, Ok(Record::new(7, vec![snapshot()])));
+    assert!(app.browse_cache.entries.is_empty());
+}
+
+#[test]
 fn back_forward_restore_occurrences_options_selection_and_scroll_without_playing() {
     let (_, mut app, events, mut requests) = fixture();
     app.query = "first search".into();

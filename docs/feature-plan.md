@@ -1,10 +1,13 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.25.0 published and installed through standalone Home Manager.**
-Published/installed baseline: v0.25.0 (`f7747a8fd13d`); published managed pin `50ca3a6`.
-Scoped installation used deployed-source commit `3b86c6b` on the verified prior
-baseline, preserving SMAD v0.5.1 without deploying unrelated reconciled master changes.
-Approved: v0.26.0 precise playlist-position moves in both directions; publication/install in progress.
+**Status: v0.27.0 approved; publication and scoped installation in progress.**
+Published/installed baseline: v0.26.0 (`355f4dea82b9`); published managed pin `5bf7bae`.
+Scoped installation used deployed-source commit `e2ee058` on the verified prior
+baseline, preserving SMAD v0.6.0 without deploying unrelated reconciled master changes.
+The v0.27 organization bundle and long-pause fix passed combined native review.
+The operator confirmed the pause fix and approved publication and installation.
+314 normal tests and strict Clippy pass on the new NixOS machine. Preserve the
+running review preview; acquire the current machine's deployed HM baseline anew.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -29,6 +32,42 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P3r bundle (v0.27.0)
+
+The operator requested playlist drag/drop, persistent metadata/artwork caches and
+supported folder/cover work together before review. Covers remain unavailable by
+explicit choice; there are no local overrides or unverified upload controls.
+
+- Playlist grips freeze account, generation, revision and occurrence IDs. Drop
+  markers and edge scrolling feed the existing guarded exact-position controller;
+  invalid/stale drops do nothing. Keyboard/menu moves remain available.
+- Opt-in account-scoped metadata persistence uses the background state worker,
+  with 8-view / 10,000-row / 8-MiB limits. Restores omit playlist mutation authority
+  and pagination, disclose saved snapshots and require Refresh. Membership absence
+  is never inferred from disk. Startup, late-result and mutation invalidation guards
+  prevent stale account data from replacing current state.
+- Opt-in artwork caching accepts only canonical unsigned TIDAL JPEG URLs, with
+  bounded background fetching, 32 memory entries, 128 disk files / 64 MiB and
+  per-image byte/dimension limits. Private files and explicit Clear controls;
+  no audio, credentials or signed media URLs. Artwork cache is shared across this
+  device's accounts; metadata is not. Disabling retains existing files.
+- Root folder creation, rename and playlist moves passed an authorized live
+  temporary-object round trip and cleanup. Folder reads now carry account/request
+  identities. Mutation preflight/read-back rejects partial or repeated listings;
+  no atomic folder revision is available, and uncertain writes never auto-retry.
+  Right-click and Shift+F10 expose the same actions.
+
+- Long-pause resume (at least 60 seconds of wall time) obtains a fresh authorized
+  stream at the same occurrence/position; short pauses keep the existing stream.
+  Early stream termination requires explicit retry at that position, without
+  automatic skipping or retry loops. Tests cover timing, stale events, occurrence
+  identity and failure; the operator confirmed the fix in real playback.
+
+Nested creation was observed to put the folder at root instead of the requested
+parent; its empty residual was removed and root absence verified. Nested creation
+is now rejected. Folder deletion remains gated because saved-content semantics
+are not fully established. See [folder validation](folder-validation.md).
 
 ## Approved P3q slice (v0.26.0)
 

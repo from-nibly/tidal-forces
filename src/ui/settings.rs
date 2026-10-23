@@ -120,6 +120,18 @@ impl App {
                 ui.label(RichText::new("Google Cast and TIDAL Connect are separate integrations. Neither is enabled in this release.").color(MUTED));
             }
             SettingsSection::Privacy => {
+                self.metadata_cache_controls(ui);
+                ui.add_space(16.);
+                surfaces::section_title(ui,"Artwork disk cache");
+                if let Some(cache)=self.artwork_cache.clone() {
+                    if ui.checkbox(&mut self.appearance.artwork_cache,"Cache TIDAL artwork on this device").changed() {
+                        cache.set_enabled(self.appearance.artwork_cache);ui.ctx().forget_all_images();self.save_appearance();
+                    }
+                    ui.label("Up to 64 MiB / 128 files of unsigned TIDAL artwork, shared across accounts on this device. No audio or signed URLs. Disabling retains files; Clear deletes cached artwork. Enabled caching can refill it as images are viewed.");
+                    if ui.button("Clear cached artwork").clicked() {cache.clear(ui.ctx());ui.ctx().forget_all_images();}
+                    ui.label(cache.status());
+                } else {ui.label("Artwork disk cache is unavailable in this session.");}
+                ui.add_space(16.);
                 self.favorite_cache_controls(ui);
                 ui.add_space(16.);
                 surfaces::section_title(ui, "Credentials");
@@ -149,6 +161,7 @@ impl App {
                     ),
                     ("Ctrl+Left / Right", "Previous / next track"),
                     ("Tab / Shift+Tab", "Move keyboard focus"),
+                    ("Shift+F10", "Organization menu on a focused library folder/playlist row"),
                     ("System media keys", "MPRIS, with existing desktop routing"),
                 ] {
                     ui.horizontal_wrapped(|ui| {

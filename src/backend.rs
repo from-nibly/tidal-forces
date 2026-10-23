@@ -47,7 +47,15 @@ pub enum Request {
         generation: u64,
     },
     Folder {
+        user: u64,
+        serial: u64,
         id: String,
+    },
+    ManageFolder {
+        user: u64,
+        operation: u64,
+        change: crate::folders::Change,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
     Mix {
         generation: u64,
@@ -280,11 +288,20 @@ pub enum Event {
         generation: u64,
         home: Home,
     },
+    FolderManaged {
+        user: u64,
+        operation: u64,
+        result: Result<crate::folders::Outcome, String>,
+    },
     Folder {
+        user: u64,
+        serial: u64,
         id: String,
         entries: Vec<LibraryEntry>,
     },
     FolderError {
+        user: u64,
+        serial: u64,
         id: String,
         message: String,
     },
@@ -390,7 +407,7 @@ impl Backend {
                             };
                             let credential_request = matches!(&request, Request::MigrateCredentials { .. } | Request::RetryCredentialSave | Request::ReloadCredentials | Request::CleanupCredentials | Request::Logout);
                             let playlist_edit = matches!(&request, Request::OwnedPlaylists | Request::CreatePlaylist { .. } | Request::AddToPlaylist { .. } | Request::RemoveFromPlaylist { .. });
-                            let folder_id = match &request { Request::Folder { id } => Some(id.clone()), _ => None };
+                            let folder_id = match &request { Request::Folder { user,serial,id } => Some((*user,*serial,id.clone())), _ => None };
                             let playback_generation = match &request { Request::Play { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
                                 match request {
@@ -458,9 +475,13 @@ impl Backend {
                                         events.send(Event::Favorite { user, item, result });
                                     }
                                     Request::Home { generation } => events.send(Event::Home { generation, home: api.home().await? }),
-                                    Request::Folder { id } => {
-                                        let entries = api.folder(&id).await?;
-                                        events.send(Event::Folder { id, entries });
+                                    Request::Folder { user,serial,id } => {
+                                        let entries = api.folder_for(user,&id).await?;
+                                        events.send(Event::Folder { user,serial,id, entries });
+                                    }
+                                    Request::ManageFolder {user,operation,change,cancelled} => {
+                                        let result=api.manage_folder(user,&change,&cancelled).await.map_err(|_|"Folder change could not be confirmed. Refresh and inspect before retrying.".into());
+                                        events.send(Event::FolderManaged {user,operation,result});
                                     }
                                     Request::Mix { generation, id } => {
                                         let tracks = api.mix_tracks(&id).await?;
@@ -543,8 +564,8 @@ impl Backend {
                             }.await;
                             if let Err(e) = result {
                                 if credential_request { api.credential_warning = Some(e.to_string()); }
-                                events.send(if playlist_edit { Event::PlaylistError(e.to_string()) } else if let Some(id) = folder_id {
-                                    Event::FolderError { id, message: e.to_string() }
+                                events.send(if playlist_edit { Event::PlaylistError(e.to_string()) } else if let Some((user,serial,id)) = folder_id {
+                                    Event::FolderError { user,serial,id, message: "Could not load this folder. Refresh to retry.".into() }
                                 } else if let Some(generation) = request_generation {
                                     Event::RequestError { generation, message: e.to_string() }
                                 } else if let Some(generation) = playback_generation {

@@ -19,6 +19,7 @@ mod browse_cache;
 mod credentials;
 mod export;
 mod favorite_cache;
+mod folder_edit;
 mod history;
 mod library;
 mod library_load;
@@ -26,7 +27,10 @@ mod library_view;
 pub(crate) mod navigation;
 mod pins;
 mod playback;
+#[cfg(test)]
+mod playback_resume_tests;
 mod playlist_delete;
+mod playlist_drag;
 mod playlist_load;
 mod playlist_metadata;
 mod reorder;
@@ -126,7 +130,11 @@ pub struct App {
     daily: Option<Mix>,
     folders: HashMap<String, Vec<LibraryEntry>>,
     expanded: HashSet<String>,
-    folder_pending: HashSet<String>,
+    folder_pending: HashMap<String, u64>,
+    folder_serial: u64,
+    folder_dialog: Option<folder_edit::Dialog>,
+    folder_operation: u64,
+    folder_refresh_required: bool,
     media: Option<DesktopControls>,
     generation: u64,
     loading: bool,
@@ -151,12 +159,14 @@ pub struct App {
     play_generation: u64,
     buffering: bool,
     paused: bool,
+    paused_since: Option<std::time::SystemTime>,
     ended: bool,
     position: u64,
     volume: f32,
     quality: String,
     actual_quality: String,
     settings_section: SettingsSection,
+    artwork_cache: Option<std::sync::Arc<crate::artwork_cache::ArtworkCache>>,
     appearance: crate::store::Appearance,
     visualizer: Visualizer,
 }
@@ -189,6 +199,21 @@ impl App {
         app.media = media_result.ok();
         app.error = media_error.or(appearance_error);
         app.pins_root = crate::store::config_dir().ok();
+        match crate::store::config_dir().and_then(|root| {
+            crate::artwork_cache::ArtworkCache::new(
+                root.join("artwork-cache-v1"),
+                app.appearance.artwork_cache,
+            )
+        }) {
+            Ok(cache) => {
+                cc.egui_ctx.add_bytes_loader(cache.clone());
+                app.artwork_cache = Some(cache);
+            }
+            Err(_) => {
+                app.error
+                    .get_or_insert_with(|| "Artwork disk cache unavailable.".into());
+            }
+        }
         match crate::store::config_dir().and_then(|root| StateStore::new(root, cc.egui_ctx.clone()))
         {
             Ok(store) => app.state_store = Some(store),
@@ -261,7 +286,11 @@ impl App {
             daily: None,
             folders: HashMap::new(),
             expanded: HashSet::new(),
-            folder_pending: HashSet::new(),
+            folder_pending: HashMap::new(),
+            folder_serial: 0,
+            folder_dialog: None,
+            folder_operation: 0,
+            folder_refresh_required: false,
             media: None,
             generation: 0,
             loading: false,
@@ -286,12 +315,14 @@ impl App {
             play_generation: 0,
             buffering: false,
             paused: true,
+            paused_since: None,
             ended: false,
             position: 0,
             volume: 0.65,
             quality: "LOSSLESS".into(),
             actual_quality: String::new(),
             settings_section: SettingsSection::General,
+            artwork_cache: None,
             appearance,
             visualizer,
         }
@@ -307,6 +338,7 @@ impl App {
             Request::SetFavorite { .. }
                 | Request::EditPlaylistMetadata { .. }
                 | Request::ReorderPlaylist { .. }
+                | Request::ManageFolder { .. }
                 | Request::DeletePlaylist { .. }
                 | Request::UnfollowPlaylist { .. }
                 | Request::CreatePlaylist { .. }
@@ -363,7 +395,7 @@ impl App {
                 | Request::CreatePlaylist { .. }
                 | Request::AddToPlaylist { .. }
                 | Request::RemoveFromPlaylist { .. } => self.playlist_busy = false,
-                Request::Folder { id } => {
+                Request::Folder { id, .. } => {
                     self.folder_pending.remove(&id);
                 }
                 _ => {}
@@ -411,6 +443,7 @@ impl App {
     }
 
     fn show_location(&mut self, location: Location, autoplay: bool) {
+        self.cancel_folder_edit();
         self.cancel_delete_playlist();
         self.cancel_reorder();
         self.save_browse_view();
@@ -442,9 +475,10 @@ impl App {
         self.loading = false;
         self.browse_cache.ready = false;
         self.browse_cache.restored = false;
+        self.browse_cache.persisted = false;
         self.browse_cache.scroll = 0.;
         self.browse_cache.pending_scroll = Some(0.);
-        if !autoplay && self.restore_browse_view(&target) {
+        if (!autoplay || self.has_persisted_view(&target)) && self.restore_browse_view(&target) {
             return;
         }
         if self.connected {
@@ -469,6 +503,7 @@ impl App {
 
     fn load_page(&mut self, offset: usize) {
         if offset == 0 {
+            self.cancel_folder_edit();
             self.cancel_delete_playlist();
             self.cancel_reorder();
         }
@@ -538,6 +573,7 @@ impl App {
         }
         self.credentials.busy = true;
         self.credentials.confirm = false;
+        self.cancel_folder_edit();
         self.cancel_delete_playlist();
         self.cancel_reorder();
         self.cancel_export(true);
@@ -780,6 +816,7 @@ impl App {
                 Event::Session(account) => {
                     let account_changed = self.account != account.as_ref().map(|(user, _)| *user);
                     if account_changed {
+                        self.cancel_folder_edit();
                         self.cancel_delete_playlist();
                         self.cancel_reorder();
                         self.cancel_export(true);
@@ -825,6 +862,7 @@ impl App {
                     self.folders.clear();
                     self.expanded.clear();
                     self.folder_pending.clear();
+                    self.folder_refresh_required = false;
                     self.playlist_page = None;
                     self.playlist_dialog = false;
                     self.playlist_target = None;
@@ -977,11 +1015,30 @@ impl App {
                     self.loading = false;
                     self.more = false;
                 }
-                Event::Folder { id, entries } => {
+                Event::FolderManaged {
+                    user,
+                    operation,
+                    result,
+                } => self.folder_result(user, operation, result),
+                Event::Folder {
+                    user,
+                    serial,
+                    id,
+                    entries,
+                } if self.account == Some(user)
+                    && self.folder_pending.get(&id) == Some(&serial) =>
+                {
                     self.folder_pending.remove(&id);
                     self.folders.insert(id, entries);
                 }
-                Event::FolderError { id, message } => {
+                Event::FolderError {
+                    user,
+                    serial,
+                    id,
+                    message,
+                } if self.account == Some(user)
+                    && self.folder_pending.get(&id) == Some(&serial) =>
+                {
                     self.folder_pending.remove(&id);
                     self.error = Some(message);
                 }
@@ -1021,8 +1078,10 @@ impl App {
                         .is_some_and(|t| self.position + 3 < t.duration)
                     {
                         self.paused = true;
-                        self.ended = true;
-                        self.error = Some("The stream ended early. Check your connection and press play to retry.".into());
+                        self.buffering = false;
+                        self.ended = false;
+                        self.actual_quality.clear();
+                        self.error = Some("The stream ended early. Check your connection and press play to resume from this position.".into());
                     } else {
                         self.advance(true);
                     }
@@ -1165,6 +1224,10 @@ impl App {
     }
 
     fn refresh_folders(&mut self) {
+        self.folder_refresh_required = false;
+        self.folders
+            .retain(|id, _| id == "root" || self.expanded.contains(id));
+        self.folder_pending.clear();
         let mut ids: Vec<_> = self.expanded.iter().cloned().collect();
         ids.push("root".into());
         for id in ids {
@@ -1181,7 +1244,7 @@ impl App {
     }
 
     fn open_playlist_dialog(&mut self, track: Option<Track>) {
-        if !self.connected || self.playlist_busy {
+        if !self.connected || self.playlist_busy || self.folder_dialog.is_some() {
             return;
         }
         self.playlist_dialog = true;
@@ -1198,8 +1261,21 @@ impl App {
     }
 
     fn request_folder(&mut self, id: &str) {
-        if self.folder_pending.insert(id.to_owned()) {
-            self.send(Request::Folder { id: id.to_owned() });
+        let Some(user) = self.account.filter(|u| *u != 0) else {
+            return;
+        };
+        if self.connected && !self.folder_pending.contains_key(id) {
+            if id == "root" {
+                self.folder_refresh_required = false;
+            }
+            self.folder_serial = self.folder_serial.wrapping_add(1);
+            self.folder_pending
+                .insert(id.to_owned(), self.folder_serial);
+            self.send(Request::Folder {
+                user,
+                serial: self.folder_serial,
+                id: id.to_owned(),
+            });
         }
     }
 
@@ -1209,7 +1285,7 @@ impl App {
             return;
         }
         let Some(entries) = self.folders.get(id).cloned() else {
-            if self.folder_pending.contains(id) {
+            if self.folder_pending.contains_key(id) {
                 ui.spinner();
             } else if ui.small_button("Load folder / retry").clicked() {
                 self.request_folder(id);
@@ -1219,19 +1295,27 @@ impl App {
         if entries.is_empty() {
             ui.label(RichText::new("Empty folder").size(12.).color(MUTED));
         }
+        let parent_id = id.to_owned();
         for entry in entries {
             match entry {
                 LibraryEntry::Folder { id, name, count } => {
                     let expanded = self.expanded.contains(&id);
-                    if ui
+                    let response = ui
                         .push_id(("folder", &id), |ui| folder_button(ui, &name, expanded))
                         .inner
                         .on_hover_text(format!(
                             "{name} · {count} items · Folder level {}",
                             depth + 1
-                        ))
-                        .clicked()
-                    {
+                        ));
+                    self.folder_menu(
+                        &response,
+                        crate::folders::Folder {
+                            id: id.clone(),
+                            parent: Some(parent_id.clone()),
+                            name: name.clone(),
+                        },
+                    );
+                    if response.clicked() {
                         if expanded {
                             self.expanded.remove(&id);
                         } else {
@@ -1254,12 +1338,12 @@ impl App {
                 }
                 LibraryEntry::Playlist(p) => {
                     let active = matches!(&self.page, Page::Collection { id, .. } if *id == p.uuid);
-                    if ui
+                    let response = ui
                         .push_id(("playlist", &p.uuid), |ui| playlist_button(ui, &p, active))
                         .inner
-                        .on_hover_text(format!("{} · {} tracks", p.title, p.number_of_tracks))
-                        .clicked()
-                    {
+                        .on_hover_text(format!("{} · {} tracks", p.title, p.number_of_tracks));
+                    self.playlist_folder_menu(&response, &p, &parent_id);
+                    if response.clicked() {
                         self.navigate(Page::Collection {
                             kind: "playlists".into(),
                             id: p.uuid,
@@ -2016,6 +2100,13 @@ impl App {
 
     fn content(&mut self, ui: &mut egui::Ui) {
         self.sync_track_view();
+        if self.browse_cache.persisted {
+            ui.label(
+                RichText::new("Saved snapshot · Refresh before editing playlists or loading more.")
+                    .color(MUTED),
+            );
+            ui.add_space(8.);
+        }
         let short = ui.ctx().content_rect().height() < 600.;
         self.credential_notice(ui);
         if let Some(error) = self.error.clone() {
@@ -2219,12 +2310,24 @@ impl App {
         }
         if self.page == Page::Playlists {
             self.pinned_playlists(ui);
-            if ui
-                .add_enabled(!self.playlist_busy, egui::Button::new("+ New playlist"))
-                .clicked()
-            {
-                self.open_playlist_dialog(None);
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        !self.playlist_busy && self.folder_dialog.is_none(),
+                        egui::Button::new("+ New playlist"),
+                    )
+                    .clicked()
+                {
+                    self.open_playlist_dialog(None);
+                }
+                if ui
+                    .add_enabled(self.can_edit_folders(), egui::Button::new("+ New folder…"))
+                    .clicked()
+                {
+                    self.new_folder();
+                }
+            });
+            ui.label(RichText::new("Right-click (or Shift+F10 on a focused row) to rename folders or move playlists.").size(12.).color(MUTED));
             self.folder_tree(ui, "root", 0);
             return;
         }
@@ -2697,7 +2800,13 @@ impl eframe::App for App {
         self.cancel_export(true);
         self.checkpoint_history(true);
         self.checkpoint(true);
+        self.persist_metadata(true);
         self.state_store.take();
+        if let Some(cache) = &self.artwork_cache
+            && cache.finish_on_exit().is_err()
+        {
+            eprintln!("Artwork cache clearing could not be completed; cached files may remain.");
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -2725,6 +2834,7 @@ impl eframe::App for App {
         self.desktop_events(ctx);
         self.credential_close_guard(ctx);
         if ctx.input(|input| input.viewport().close_requested()) {
+            self.cancel_folder_edit();
             self.cancel_delete_playlist();
             self.cancel_reorder();
             self.cancel_export(false);
@@ -2791,6 +2901,7 @@ impl eframe::App for App {
         self.playlist_windows(ctx);
         self.metadata_window(ctx);
         self.delete_playlist_window(ctx);
+        self.folder_window(ctx);
         self.reorder_window(ctx);
         self.export_window(ctx);
         self.handle_track_paste(ctx);

@@ -1,5 +1,37 @@
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+// A conservative idle policy, not a claim about TIDAL's signed-URL lifetime.
+// Wall time includes suspend on Linux; a backwards clock also forces renewal.
+fn refresh_after_pause(paused: Option<SystemTime>, now: SystemTime) -> bool {
+    paused.is_some_and(|start| {
+        now.duration_since(start)
+            .map_or(true, |elapsed| elapsed >= Duration::from_secs(60))
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn pause_refresh_policy_covers_boundary_suspend_and_clock_rollback() {
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    assert!(!refresh_after_pause(None, start));
+    assert!(!refresh_after_pause(
+        Some(start),
+        start + Duration::from_secs(59)
+    ));
+    assert!(refresh_after_pause(
+        Some(start),
+        start + Duration::from_secs(60)
+    ));
+    assert!(refresh_after_pause(
+        Some(start),
+        start + Duration::from_secs(86400)
+    ));
+    assert!(refresh_after_pause(
+        Some(start),
+        start - Duration::from_secs(1)
+    ));
+}
 
 enum PageStart {
     Track(usize),
@@ -31,6 +63,7 @@ impl App {
         self.play_generation = self.backend.player.reserve();
         self.position = position;
         self.paused = false;
+        self.paused_since = None;
         self.buffering = true;
         self.waiting_context = false;
         self.ended = false;
@@ -157,6 +190,7 @@ impl App {
         }
         if self.buffering {
             self.paused = !self.paused;
+            self.paused_since = self.paused.then(SystemTime::now);
             return;
         }
         if self.ended && self.context_error.is_some() && self.queue.continuation().is_some() {
@@ -166,10 +200,13 @@ impl App {
             self.paused = false;
         } else if self.ended {
             self.play_current();
-        } else if self.actual_quality.is_empty() {
+        } else if self.actual_quality.is_empty()
+            || (self.paused && refresh_after_pause(self.paused_since, SystemTime::now()))
+        {
             self.play_at(self.position);
         } else {
             self.paused = !self.paused;
+            self.paused_since = self.paused.then(SystemTime::now);
             self.backend.player.pause(self.paused);
         }
     }
@@ -261,6 +298,7 @@ impl App {
     }
 
     pub(super) fn request_restore(&mut self) {
+        self.load_metadata_cache();
         let (Some(user), Some(store)) = (self.account, &self.state_store) else {
             return;
         };
@@ -348,6 +386,16 @@ impl App {
                     revision,
                     result,
                 } => self.history_saved(user, revision, result),
+                crate::player_state::Event::CacheLoaded {
+                    user,
+                    request,
+                    result,
+                } => self.metadata_cache_loaded(user, request, result),
+                crate::player_state::Event::CacheSaved {
+                    user,
+                    request,
+                    result,
+                } => self.metadata_cache_saved(user, request, result),
                 crate::player_state::Event::Loaded {
                     user,
                     request,

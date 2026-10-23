@@ -9,8 +9,10 @@
   addresses in source, logs, screenshots or releases.
 - Real account mutations, credential migration/cleanup and audible/device tests need
   separate explicit opt-in. Version approval does not authorize those tests.
-- Do not run all ignored tests: the live playlist round trip mutates an account.
-  The Secret Service contract must use its documented isolated D-Bus invocation.
+- Do not run all ignored tests: live playlist and folder round trips mutate an account.
+  Folder probes require separate explicit temporary-object authorization; see
+  `docs/folder-validation.md`. The Secret Service contract must use its documented
+  isolated D-Bus invocation.
 - Keep the running review preview unchanged during development. Check playback and
   obtain approval for replacement; quit gracefully, never force-close unsaved sign-in.
 

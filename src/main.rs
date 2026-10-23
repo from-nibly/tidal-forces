@@ -1,5 +1,6 @@
 mod aac;
 mod api;
+mod artwork_cache;
 mod audio;
 mod audio_meter;
 #[cfg(test)]
@@ -9,11 +10,13 @@ mod backend;
 mod credentials;
 mod dash;
 mod desktop;
+mod folders;
 mod history;
 mod install;
 mod library;
 mod licenses;
 mod links;
+mod metadata_cache;
 mod model;
 mod pins;
 mod player_state;
