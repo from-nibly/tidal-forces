@@ -5,8 +5,45 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+fn collect_pcm(source: impl Source<Item = f32> + Send + 'static) -> Vec<f32> {
+    let (mut pcm, feedback) = crate::pcm::Pool::default().start(Box::new(source)).unwrap();
+    let activity = feedback.activity();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut samples = Vec::new();
+    for sample in &mut pcm {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Synthetic PCM transfer timed out"
+        );
+        if activity.load(Ordering::Relaxed) {
+            samples.push(sample);
+        } else {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    assert!(!feedback.failed());
+    samples
+}
+
+async fn wait_buffered(audio: &DashSource) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if (0..audio.manifest.segments.len())
+            .all(|i| audio.cache.state.lock().unwrap().disk.contains(i))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Whole-song buffering timed out"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 struct FixtureServer {
     address: SocketAddr,
+    requests: Arc<Mutex<Vec<usize>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -26,6 +63,8 @@ impl FixtureServer {
         listener.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
         let thread = std::thread::spawn(move || {
             while !stopped.load(Ordering::SeqCst) {
                 match listener.accept() {
@@ -42,6 +81,9 @@ impl FixtureServer {
                                 .parse::<usize>()
                                 .ok()
                         });
+                        if let Some(index) = index {
+                            recorded.lock().unwrap().push(index);
+                        }
                         if let Some(bytes) = index.and_then(|i| files.get(i)) {
                             let _ = write!(
                                 socket,
@@ -62,6 +104,7 @@ impl FixtureServer {
         });
         Self {
             address,
+            requests,
             stop,
             thread: Some(thread),
         }
@@ -103,6 +146,10 @@ impl Drop for FixtureServer {
 async fn lossless_segments_are_contiguous_and_seekable_with_bounded_buffering() {
     let server = FixtureServer::start();
     let mut audio = source(server.manifest()).await.unwrap();
+    let handoff = source(server.manifest()).await.unwrap();
+    wait_buffered(&audio).await;
+    wait_buffered(&handoff).await;
+    drop(server); // Playback and backward/forward seeks must now work without HTTP.
     tokio::task::spawn_blocking(move || {
         assert_eq!(audio.channels(), 1);
         assert_eq!(audio.sample_rate(), 44100);
@@ -111,6 +158,11 @@ async fn lossless_segments_are_contiguous_and_seekable_with_bounded_buffering() 
             decoded.len(),
             141120,
             "No missing or duplicate frames at segment boundaries"
+        );
+        assert_eq!(
+            collect_pcm(handoff),
+            decoded,
+            "PCM handoff must preserve FLAC boundaries"
         );
         audio.try_seek(Duration::from_millis(1500)).unwrap();
         let after_seek: Vec<_> = audio.by_ref().take(30000).collect();
@@ -126,7 +178,9 @@ async fn lossless_segments_are_contiguous_and_seekable_with_bounded_buffering() 
         {
             let mut cache = audio.cache.state.lock().unwrap();
             cache.chunks.clear();
-            cache.error = Some("simulated network outage after preparation".into());
+            cache
+                .errors
+                .insert(2, "simulated network outage after preparation".into());
         }
         audio.try_seek(Duration::from_millis(2500)).unwrap();
         assert_eq!(
@@ -177,7 +231,11 @@ async fn aac_lc_he_aac_and_he_aac_v2_preserve_decoder_state_and_seek() {
             })
             .collect();
         manifest.duration = Duration::from_secs_f64(frames as f64 / 44100.);
-        let mut audio = source(manifest).await.unwrap();
+        let mut audio = source(manifest.clone()).await.unwrap();
+        let handoff = source(manifest).await.unwrap();
+        wait_buffered(&audio).await;
+        wait_buffered(&handoff).await;
+        drop(server); // AAC preroll must use retained compressed fragments too.
         tokio::task::spawn_blocking(move || {
             assert_eq!(
                 audio.sample_rate(),
@@ -195,6 +253,11 @@ async fn aac_lc_he_aac_and_he_aac_v2_preserve_decoder_state_and_seek() {
             assert_eq!(
                 actual, reference,
                 "Codec state must survive network fragment boundaries: {codec:?}"
+            );
+            assert_eq!(
+                collect_pcm(handoff),
+                actual,
+                "PCM handoff must preserve AAC boundaries"
             );
             assert!(actual.iter().any(|v| v.abs() > 0.05));
             audio
@@ -217,6 +280,48 @@ async fn aac_lc_he_aac_and_he_aac_v2_preserve_decoder_state_and_seek() {
         .await
         .unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cap_falls_back_to_window_and_seeking_fetches_only_the_missing_fragment() {
+    let server = FixtureServer::start();
+    let mut audio = source_with_limit(server.manifest(), 0).await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !audio.cache.state.lock().unwrap().chunks.contains_key(&2) {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(!audio.cache.state.lock().unwrap().disk.can_prefetch());
+    let before = server.requests.lock().unwrap().len();
+    let requests = server.requests.clone();
+    tokio::task::spawn_blocking(move || {
+        audio.try_seek(Duration::from_millis(3150)).unwrap();
+        let samples: Vec<_> = audio.by_ref().take(1000).collect();
+        assert_eq!(samples.len(), 1000);
+        assert_eq!(&requests.lock().unwrap()[before..], &[4]);
+        audio.try_seek(Duration::from_millis(3150)).unwrap();
+        assert_eq!(audio.take(1000).collect::<Vec<_>>(), samples);
+        assert_eq!(&requests.lock().unwrap()[before..], &[4]);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_waiting_segment_read_releases_the_decoder_for_seek() {
+    let server = FixtureServer::start();
+    let audio = source_with_limit(server.manifest(), 0).await.unwrap();
+    audio.request.send(None).unwrap();
+    audio.request.closed().await;
+    let seeker = audio.seek_handle();
+    let blocked = seeker.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        tx.send(blocked.data(3).is_err()).unwrap();
+    });
+    seeker.interrupt();
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    worker.join().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

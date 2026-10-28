@@ -39,7 +39,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "folder-rename",
             "folder-move",
             "cache-settings",
-            "cached-playlist"
+            "cached-playlist",
+            "stream-buffering"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -404,6 +405,10 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             source: "root".into(),
             destination: crate::folders::Folder::root(),
         });
+    }
+    if page == "stream-buffering" {
+        app.paused = false;
+        app.starved_generation = Some(app.play_generation);
     }
     if page == "cached-playlist" {
         app.browse_loaded();

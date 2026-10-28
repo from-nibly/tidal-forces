@@ -223,7 +223,7 @@ impl App {
             self.cancel_reorder();
             return;
         }
-        if self.buffering || self.loading || dialog.choosing_position {
+        if self.audio_buffering() || self.loading || dialog.choosing_position {
             return;
         }
         let request = match &dialog.phase {

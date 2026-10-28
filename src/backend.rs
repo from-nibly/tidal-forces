@@ -168,6 +168,10 @@ pub enum Request {
         quality: String,
         position: u64,
     },
+    SeekBuffered {
+        generation: u64,
+        position: u64,
+    },
 }
 
 pub enum Event {
@@ -313,6 +317,10 @@ pub enum Event {
         generation: u64,
         quality: String,
     },
+    StreamBuffering {
+        generation: u64,
+        buffering: bool,
+    },
     Listening {
         generation: u64,
         rendered: std::time::Duration,
@@ -373,6 +381,7 @@ impl Backend {
                 }
             };
             runtime.block_on(async move {
+                audio.set_seek_runtime(events.clone());
                 let mut api = match Api::new() {
                     Ok(a) => a,
                     Err(e) => { events.send(Event::Error(e.to_string())); return; }
@@ -408,7 +417,7 @@ impl Backend {
                             let credential_request = matches!(&request, Request::MigrateCredentials { .. } | Request::RetryCredentialSave | Request::ReloadCredentials | Request::CleanupCredentials | Request::Logout);
                             let playlist_edit = matches!(&request, Request::OwnedPlaylists | Request::CreatePlaylist { .. } | Request::AddToPlaylist { .. } | Request::RemoveFromPlaylist { .. });
                             let folder_id = match &request { Request::Folder { user,serial,id } => Some((*user,*serial,id.clone())), _ => None };
-                            let playback_generation = match &request { Request::Play { generation, .. } => Some(*generation), _ => None };
+                            let playback_generation = match &request { Request::Play { generation, .. } | Request::SeekBuffered { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
                                 match request {
                                     Request::BeginPkce => {
@@ -548,6 +557,15 @@ impl Backend {
                                         let result = api.context_page(user, &source).await.map_err(|e| e.to_string());
                                         events.send(Event::ContextPage { generation, result });
                                     }
+                                    Request::SeekBuffered { generation, position } => {
+                                        let audio = audio.clone();
+                                        let events = events.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = audio.seek_buffered(generation, position).await {
+                                                events.send(Event::PlaybackError { generation, message: e.to_string() });
+                                            }
+                                        });
+                                    }
                                     Request::Play { generation, id, quality, position } => {
                                         if !audio.current(generation) { return Ok(()); }
                                         let stream = api.stream(id, &quality).await?;
@@ -634,6 +652,33 @@ fn login_url(value: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn buffered_seek_dispatch_does_not_wait_for_the_catalog_queue() {
+        let player = Player::inert();
+        player.seed_buffered_fixture();
+        let (tx, rx) = mpsc::channel();
+        player.set_seek_runtime(Events {
+            tx,
+            ctx: eframe::egui::Context::default(),
+        });
+        let (catalog, _blocked) = async_mpsc::channel(1);
+        catalog.send(Request::Home { generation: 1 }).await.unwrap();
+        let generation = player.reserve_seek(0).unwrap();
+        assert!(player.dispatch_seek(generation, 1));
+        let event =
+            tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(3)))
+                .await
+                .unwrap()
+                .unwrap();
+        // The inert output is deliberately closed; receiving its error proves
+        // the seek ran without draining the blocked catalog request.
+        assert!(
+            matches!(event, Event::PlaybackError { generation: id, message } if id == generation && message == "Audio output is unavailable")
+        );
+        assert_eq!(catalog.capacity(), 0);
+        assert!(player.reserve_seek(generation).is_none());
+    }
+
     #[test]
     fn only_opens_tidal_login() {
         assert!(login_url("link.tidal.com/abc").is_ok());

@@ -140,7 +140,7 @@ impl App {
             self.album_load = None;
             return;
         }
-        if self.loading || load.in_flight || self.buffering {
+        if self.loading || load.in_flight || self.audio_buffering() {
             return;
         }
         if !self.more || self.album_position.as_ref() != Some(&load.position) {

@@ -27,7 +27,7 @@ async fn decodes_and_seeks_aac_mp4_and_flac_streams() {
         });
         let reader = StreamDownload::new_http(
             format!("http://{address}/audio").parse().unwrap(),
-            TempStorageProvider::new(),
+            crate::audio::audio_storage(),
             Settings::default(),
         )
         .await
@@ -51,7 +51,7 @@ use std::{
     net::TcpListener,
     time::Duration,
 };
-use stream_download::{Settings, StreamDownload, storage::temp::TempStorageProvider};
+use stream_download::{Settings, StreamDownload};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_and_decodes_audio_from_http_without_an_external_player() {
@@ -89,7 +89,7 @@ async fn streams_and_decodes_audio_from_http_without_an_external_player() {
     });
     let reader = StreamDownload::new_http(
         format!("http://{addr}/test.wav").parse().unwrap(),
-        TempStorageProvider::new(),
+        crate::audio::audio_storage(),
         Settings::default().prefetch_bytes(4096),
     )
     .await

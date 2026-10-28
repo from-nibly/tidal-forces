@@ -2,6 +2,7 @@ mod aac;
 mod api;
 mod artwork_cache;
 mod audio;
+mod audio_buffer;
 mod audio_meter;
 #[cfg(test)]
 mod audio_tests;
@@ -18,6 +19,7 @@ mod licenses;
 mod links;
 mod metadata_cache;
 mod model;
+mod pcm;
 mod pins;
 mod player_state;
 mod queue;
@@ -272,11 +274,17 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                     if seek {
                         backend.player.pause(true);
                         std::thread::sleep(Duration::from_millis(500));
-                        backend.player.seek(45);
-                        backend.player.pause(false);
+                        let generation =
+                            backend.player.reserve_seek(generation).ok_or_else(|| {
+                                anyhow::anyhow!("Current stream buffer is unavailable")
+                            })?;
+                        backend.tx.blocking_send(Request::SeekBuffered {
+                            generation,
+                            position: 45,
+                        })?;
                         seeking = true;
                         println!(
-                            "Nine seconds across segment boundaries passed; testing seek to 45s."
+                            "Nine seconds across segment boundaries passed; testing buffered seek to 45s."
                         );
                     } else {
                         backend.player.stop();

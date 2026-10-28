@@ -54,7 +54,7 @@ impl App {
         self.play_at(0);
     }
 
-    fn play_at(&mut self, position: u64) {
+    pub(super) fn play_at(&mut self, position: u64) {
         let Some(track) = self.queue.current() else {
             return;
         };
@@ -282,7 +282,9 @@ impl App {
         // Run after foreground UI actions: a newly requested stream goes first.
         if self.context_loading
             || self.context_error.is_some()
-            || (!self.context_retry && !self.waiting_context && (self.paused || self.buffering))
+            || (!self.context_retry
+                && !self.waiting_context
+                && (self.paused || self.audio_buffering()))
         {
             return;
         }

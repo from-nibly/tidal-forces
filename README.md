@@ -216,6 +216,33 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Audio handoff and current-song buffering (v0.28.0)
+
+- Decoders and stream reads run on bounded background workers, not on the audio
+  output callback. A bounded PCM ring supplies complete frames without decoding,
+  network/disk reads or buffer allocation in the callback.
+- Underflow outputs temporary silence and shows buffering; those silent fill
+  frames do not advance the song position or count toward listening history.
+  Pause remains usable while buffering. Malformed/changing formats fail closed.
+- The current song downloads ahead into private, anonymous temporary storage,
+  capped at 256 MiB per stream (plus bounded decoder/working buffers). DASH retains
+  a three-fragment streaming window when the file cap is reached; direct streams
+  use bounded temporary-file storage. Nothing becomes a persistent offline library.
+- Seeking reuses the current decoder and buffered audio off the output callback,
+  preserving occurrence, queue revision and play/pause intent. Fully buffered
+  songs need no fresh authorization or network request for a seek; decoding/AAC
+  preroll still takes time. Missing DASH fragments are fetched with seek priority.
+  Oversized direct streams have limited seek coverage once bytes leave the window;
+  unsupported seeks fail visibly rather than returning the wrong audio.
+- Stop, track/account replacement and exit release the temporary song resources.
+  No signed URLs or credentials are written into the audio buffers. Long-pause
+  authorization renewal remains conservative; network/error recovery is not an
+  automatic retry loop.
+- Finite decoded samples pass through unchanged before existing volume/output
+  conversion. Synthetic tests include FLAC, AAC-LC, HE-AAC and HE-AAC v2.
+- This is the prerequisite for prepared-next playback. Continuous track handoff,
+  gapless claims, output-device recovery and DSP are **not implemented here**.
+
 ## Organization bundle (v0.27.0)
 
 - **Long-pause resume:** after a pause of at least one minute, Play obtains a

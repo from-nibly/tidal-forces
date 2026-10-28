@@ -1,13 +1,15 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.27.0 approved; publication and scoped installation in progress.**
-Published/installed baseline: v0.26.0 (`355f4dea82b9`); published managed pin `5bf7bae`.
-Scoped installation used deployed-source commit `e2ee058` on the verified prior
-baseline, preserving SMAD v0.6.0 without deploying unrelated reconciled master changes.
+**Status: v0.28.0 approved; publication and scoped installation in progress.**
+Published/installed baseline: v0.27.0 (`0c15ddef8c21`); published managed pin `e48c3a0`.
+Scoped installation used deployed-source commit `dcde66c` on the exactly reproduced
+baseline, preserving protected services and the separately approved input setting
+without deploying unrelated reconciled master changes.
 The v0.27 organization bundle and long-pause fix passed combined native review.
 The operator confirmed the pause fix and approved publication and installation.
-314 normal tests and strict Clippy pass on the new NixOS machine. Preserve the
-running review preview; acquire the current machine's deployed HM baseline anew.
+314 normal tests and strict Clippy passed for v0.27 on the new NixOS machine.
+Keep the original phase order: radio continuation stays in P5. Preserve the running
+review preview; new releases and live audio/device tests remain separately gated.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
 Selection actions, Clear and Reverse are in the hamburger menu beside the sort
 selector. Keyboard selection and view-only playback are preserved. Validation:
@@ -32,6 +34,33 @@ Do not push master before approval because its workflow publishes automatically.
 Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
+
+## Approved P4a slice (v0.28.0)
+
+Before preparing the next track, remove blocking decoder/stream reads from the
+output callback. The current slice provides a single-producer/single-consumer PCM
+ring with complete-frame publication, bounded worker admission, asynchronous
+cancellation, and decoder/buffer cleanup off the audio callback. Underflow is temporary
+silence and buffering, not listening credit or fabricated media position.
+
+Seeks reuse the current decoder through an exclusive worker-side lease and retain
+occurrence/queue identity, pause intent and long-pause renewal guards. Current-song
+compressed data downloads ahead into private anonymous temporary files, capped at
+256 MiB per stream plus bounded working buffers. Whole-song buffering is possible
+within that cap; larger DASH streams retain a three-fragment working window and
+missing segments receive seek priority. Direct streams use bounded file storage;
+seeks outside retained ranges can be unsupported and must fail visibly, not replay
+incorrect bytes. This is current-song buffering, not larger prepared-next downloads
+or an offline library. Stop/replacement/logout release the session resources.
+
+Tests cover stalled producers, frame alignment, backpressure, cancellation,
+file caps/privacy, reused/stale seek scopes, pause, and unchanged FLAC/AAC samples.
+Synthetic FLAC/AAC-LC/HE-AAC/HE-AAC v2 playback and seeks also run after the fixture
+HTTP server shuts down, proving buffered data is sufficient without reauthorization.
+This does not yet
+implement prepared-next/continuous track handoff, sample-perfect gapless playback,
+output-device recovery, DSP or radio continuation. No live audio/device tests have
+been authorized for this slice.
 
 ## Approved P3r bundle (v0.27.0)
 
@@ -954,6 +983,23 @@ never add an always-on processing stage to an otherwise bypassed path by acciden
   suddenly playing through speakers. Remember preference, not a stale device handle.
 - Local EQ/normalization do not affect genuine Connect remote playback. Reflect
   this in settings and disable the local PCM visualizer for remote playback.
+
+### P4 playback reliability — unavailable catalog tracks (planned)
+
+- Confirmed unstreamable songs remain visible but subtly grayed out, like TIDAL's
+  desktop/web players. Keep titles readable and retain non-playback actions such
+  as playlist management. Do not show a popup for ordinary track unavailability.
+- During ongoing queue playback, skip confirmed unavailable tracks with a bounded
+  consecutive-skip limit; never loop indefinitely through an unavailable queue.
+- Unknown availability stays visually normal. Network failures, expired login,
+  subscription restrictions and decoder errors must not be conflated with a
+  confirmed unavailable asset or trigger this auto-skip policy.
+- Scope availability evidence to the account and revalidate/expire it; a failed
+  attempt must not permanently gray a song out for every account. Preserve queue
+  occurrences and generation guards, including duplicate tracks and repeat modes.
+- Verify dimmed-row readability, no-popup behavior, stale/account-scoped evidence,
+  recovery, skip bounds and all-unavailable queues with synthetic tests first.
+  This is separate from P5 radio/autoplay and is not implemented in v0.28.0.
 
 ## 7. Network playback: Google Cast and TIDAL Connect are separate tracks
 

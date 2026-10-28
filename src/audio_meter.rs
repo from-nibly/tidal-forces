@@ -3,7 +3,7 @@ use rodio::{Source, source::SeekError};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -16,6 +16,7 @@ pub struct Meter<S> {
     rate: u32,
     channel: u16,
     frames: u16,
+    activity: Option<Arc<AtomicBool>>,
 }
 impl<S: Source<Item = f32>> Meter<S> {
     pub fn new(inner: S, total: Arc<AtomicU64>) -> Self {
@@ -27,7 +28,15 @@ impl<S: Source<Item = f32>> Meter<S> {
             remainder: 0,
             channel: 0,
             frames: 0,
+            activity: None,
         }
+    }
+
+    /// The inner source marks whole frames as real PCM or underflow fill.
+    pub fn with_activity(inner: S, total: Arc<AtomicU64>, activity: Arc<AtomicBool>) -> Self {
+        let mut meter = Self::new(inner, total);
+        meter.activity = Some(activity);
+        meter
     }
 }
 impl<S: Source<Item = f32>> Iterator for Meter<S> {
@@ -39,6 +48,14 @@ impl<S: Source<Item = f32>> Iterator for Meter<S> {
             self.total.store(self.nanos, Ordering::Relaxed);
             return None;
         };
+        if self
+            .activity
+            .as_ref()
+            .is_some_and(|active| !active.load(Ordering::Relaxed))
+        {
+            self.total.store(self.nanos, Ordering::Relaxed);
+            return Some(sample);
+        }
         if rate != self.rate {
             self.rate = rate;
             self.remainder = 0;

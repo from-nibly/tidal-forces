@@ -25,6 +25,8 @@ mod library;
 mod library_load;
 mod library_view;
 pub(crate) mod navigation;
+#[cfg(test)]
+mod pcm_tests;
 mod pins;
 mod playback;
 #[cfg(test)]
@@ -158,6 +160,7 @@ pub struct App {
     last_checkpoint: std::time::Instant,
     play_generation: u64,
     buffering: bool,
+    starved_generation: Option<u64>,
     paused: bool,
     paused_since: Option<std::time::SystemTime>,
     ended: bool,
@@ -314,6 +317,7 @@ impl App {
             last_checkpoint: std::time::Instant::now(),
             play_generation: 0,
             buffering: false,
+            starved_generation: None,
             paused: true,
             paused_since: None,
             ended: false,
@@ -329,6 +333,14 @@ impl App {
     }
 
     fn send(&mut self, r: Request) {
+        if let Request::SeekBuffered {
+            generation,
+            position,
+        } = &r
+            && self.backend.player.dispatch_seek(*generation, *position)
+        {
+            return;
+        }
         self.try_send(r);
     }
 
@@ -1062,6 +1074,12 @@ impl App {
                     self.backend.player.pause(self.paused);
                     self.actual_quality = quality;
                 }
+                Event::StreamBuffering {
+                    generation,
+                    buffering,
+                } if generation == self.play_generation && !self.actual_quality.is_empty() => {
+                    self.starved_generation = buffering.then_some(generation);
+                }
                 Event::Listening {
                     generation,
                     rendered,
@@ -1072,6 +1090,7 @@ impl App {
                     seconds,
                 } if generation == self.play_generation => self.position = seconds,
                 Event::Ended(generation) if generation == self.play_generation => {
+                    self.starved_generation = None;
                     if self
                         .queue
                         .current()
@@ -1090,6 +1109,7 @@ impl App {
                     generation,
                     message,
                 } if generation == self.play_generation => {
+                    self.starved_generation = None;
                     self.buffering = false;
                     self.paused = true;
                     self.ended = false;
@@ -1167,6 +1187,10 @@ impl App {
         }
     }
 
+    fn audio_buffering(&self) -> bool {
+        self.buffering || self.starved_generation == Some(self.play_generation)
+    }
+
     fn seek(&mut self, seconds: u64) {
         if self.buffering {
             return;
@@ -1174,7 +1198,25 @@ impl App {
         if let Some(t) = self.queue.current() {
             self.position = seconds.min(t.duration.saturating_sub(1));
             if !self.actual_quality.is_empty() && !self.ended {
-                self.backend.player.seek(self.position);
+                if let Some(generation) = self.backend.player.reserve_seek(self.play_generation) {
+                    self.play_generation = generation;
+                    self.buffering = true;
+                    self.waiting_context = false;
+                    self.ended = false;
+                    self.actual_quality.clear();
+                    self.error = None;
+                    if self.paused && self.paused_since.is_none() {
+                        self.paused_since = Some(std::time::SystemTime::now());
+                    }
+                    self.send(Request::SeekBuffered {
+                        generation,
+                        position: self.position,
+                    });
+                } else {
+                    let paused = self.paused;
+                    self.play_at(self.position);
+                    self.paused = paused;
+                }
             } else {
                 self.ended = false;
                 self.actual_quality.clear();
@@ -1636,15 +1678,15 @@ impl App {
                                             let transport = icon_button(
                                                 ui,
                                                 if self.paused { Icon::Play } else { Icon::Pause },
-                                                if self.buffering {
-                                                    "Loading · Click to pause / resume"
+                                                if self.audio_buffering() {
+                                                    "Buffering · Click to pause / resume"
                                                 } else {
                                                     "Play / pause · Space"
                                                 },
                                                 true,
                                                 42.,
                                             );
-                                            if self.buffering {
+                                            if self.audio_buffering() {
                                                 egui::Spinner::new().size(12.).paint_at(
                                                     ui,
                                                     egui::Rect::from_min_size(
@@ -2915,10 +2957,11 @@ impl eframe::App for App {
         self.queue_drag_cursor(ctx);
         self.checkpoint_history(false);
         self.checkpoint(false);
+        let media_paused = self.paused || self.audio_buffering();
         if let Some(media) = &mut self.media
             && let Err(e) = media.update(
                 self.queue.current(),
-                self.paused || self.buffering,
+                media_paused,
                 self.position,
                 self.volume,
             )

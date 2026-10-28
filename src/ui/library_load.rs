@@ -100,7 +100,7 @@ impl App {
             self.library_load = None;
             return;
         }
-        if self.loading || load.in_flight || self.buffering {
+        if self.loading || load.in_flight || self.audio_buffering() {
             return;
         }
         if !self.more || self.library_offset != load.offset || self.library_total != load.total {

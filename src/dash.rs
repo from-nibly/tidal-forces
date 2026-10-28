@@ -3,7 +3,10 @@ use rodio::{Decoder, Source, source::SeekError};
 use std::{
     collections::BTreeMap,
     io::Cursor,
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::watch;
@@ -177,15 +180,39 @@ fn validate_url(value: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
 struct CacheState {
     chunks: BTreeMap<usize, Arc<Vec<u8>>>,
-    error: Option<String>,
+    errors: BTreeMap<usize, String>,
+    disk: crate::audio_buffer::Segments,
+    cursor: usize,
 }
-#[derive(Default)]
+impl CacheState {
+    fn contains(&self, index: usize) -> bool {
+        self.chunks.contains_key(&index) || self.disk.contains(index)
+    }
+    fn read(&mut self, index: usize) -> Result<Option<Arc<Vec<u8>>>> {
+        if let Some(bytes) = self.chunks.get(&index) {
+            return Ok(Some(bytes.clone()));
+        }
+        Ok(self.disk.get(index)?.map(Arc::new))
+    }
+    fn insert(&mut self, index: usize, bytes: Arc<Vec<u8>>) -> Result<()> {
+        self.disk.insert(index, &bytes)?;
+        if (self.cursor..=self.cursor + 2).contains(&index) {
+            self.chunks.insert(index, bytes);
+        }
+        self.errors.remove(&index);
+        Ok(())
+    }
+    fn move_to(&mut self, index: usize) {
+        self.cursor = index;
+        self.chunks.retain(|i, _| (index..=index + 2).contains(i));
+    }
+}
 struct Cache {
     state: Mutex<CacheState>,
     ready: Condvar,
+    interrupted: AtomicBool,
 }
 
 enum ChunkDecoder {
@@ -239,14 +266,64 @@ pub struct SeekHandle {
     manifest: Manifest,
     init: Arc<Vec<u8>>,
     cache: Arc<Cache>,
-    client: reqwest::Client,
-    runtime: tokio::runtime::Handle,
+    request: watch::Sender<Option<usize>>,
     prepared: Arc<Mutex<Option<PreparedSeek>>>,
     channels: u16,
 }
 impl SeekHandle {
-    // Called on the audio-control thread, never the real-time output callback.
+    pub fn interrupt(&self) {
+        self.cache.interrupted.store(true, Ordering::Release);
+        self.cache.ready.notify_all();
+    }
+
+    fn data(&self, index: usize) -> Result<Arc<Vec<u8>>> {
+        let mut state = self.cache.state.lock().unwrap();
+        state.move_to(index);
+        self.request.send_if_modified(|current| {
+            if *current == Some(index) {
+                false
+            } else {
+                *current = Some(index);
+                true
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !state.contains(index) && !state.errors.contains_key(&index) {
+            ensure!(
+                !self.cache.interrupted.load(Ordering::Acquire),
+                "Audio read cancelled"
+            );
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "DASH buffering timed out"
+            );
+            state = self
+                .cache
+                .ready
+                .wait_timeout(state, Duration::from_millis(50))
+                .unwrap()
+                .0;
+        }
+        ensure!(
+            !self.cache.interrupted.load(Ordering::Acquire),
+            "Audio read cancelled"
+        );
+        match state.read(index)? {
+            Some(data) => Ok(data),
+            None => bail!(
+                "{}",
+                state
+                    .errors
+                    .get(&index)
+                    .map(String::as_str)
+                    .unwrap_or("Missing audio fragment")
+            ),
+        }
+    }
+
+    // Called on a decoder/preparation worker, never the output callback.
     pub fn prepare(&self, position: Duration) -> Result<()> {
+        self.cache.interrupted.store(false, Ordering::Release);
         let position = position.min(
             self.manifest
                 .duration
@@ -257,30 +334,13 @@ impl SeekHandle {
             .segments
             .partition_point(|s| s.start <= position)
             .saturating_sub(1);
-        let cached = self.cache.state.lock().unwrap().chunks.get(&index).cloned();
-        let data = match cached {
-            Some(data) => data,
-            None => Arc::new(
-                self.runtime
-                    .block_on(download(&self.client, &self.manifest.segments[index].url))?,
-            ),
+        let previous = if self.manifest.codec != Codec::Flac && index > 0 {
+            Some(self.data(index - 1)?)
+        } else {
+            None
         };
-        let mut decoder = if self.manifest.codec != Codec::Flac && index > 0 {
-            let previous = self
-                .cache
-                .state
-                .lock()
-                .unwrap()
-                .chunks
-                .get(&(index - 1))
-                .cloned();
-            let previous = match previous {
-                Some(bytes) => bytes,
-                None => Arc::new(self.runtime.block_on(download(
-                    &self.client,
-                    &self.manifest.segments[index - 1].url,
-                ))?),
-            };
+        let data = self.data(index)?;
+        let mut decoder = if let Some(previous) = previous {
             let mut decoder = decode_chunk(&self.init, &previous, self.manifest.codec)?;
             for _ in decoder.by_ref() {}
             ensure!(!decoder.failed(), "AAC seek preroll failed");
@@ -349,6 +409,7 @@ async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
         );
         bytes.extend_from_slice(&chunk);
     }
+    ensure!(!bytes.is_empty(), "TIDAL returned an empty audio segment");
     Ok(bytes)
 }
 
@@ -375,43 +436,78 @@ fn decode_chunk(init: &[u8], media: &[u8], codec: Codec) -> Result<ChunkDecoder>
 }
 
 pub async fn source(manifest: Manifest) -> Result<DashSource> {
+    source_with_limit(manifest, crate::audio_buffer::MAX_BYTES).await
+}
+
+async fn source_with_limit(manifest: Manifest, limit: usize) -> Result<DashSource> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(25))
         .build()?;
     let init = Arc::new(download(&client, &manifest.init).await?);
     let first = Arc::new(download(&client, &manifest.segments[0].url).await?);
-    let cache = Arc::new(Cache::default());
-    cache.state.lock().unwrap().chunks.insert(0, first.clone());
+    let cache = Arc::new(Cache {
+        state: Mutex::new(CacheState {
+            chunks: BTreeMap::new(),
+            errors: BTreeMap::new(),
+            cursor: 0,
+            disk: crate::audio_buffer::Segments::new(limit)?,
+        }),
+        ready: Condvar::new(),
+        interrupted: AtomicBool::new(false),
+    });
+    cache.state.lock().unwrap().insert(0, first.clone())?;
     let (tx, mut rx) = watch::channel(Some(0));
     let worker_cache = cache.clone();
     let segments = manifest.segments.clone();
-    let seek_client = client.clone();
-    let runtime = tokio::runtime::Handle::current();
     tokio::spawn(async move {
-        loop {
+        'buffer: loop {
             let Some(index) = *rx.borrow_and_update() else {
                 break;
             };
-            // Retain only the current fragment and two ahead, even after a seek.
+            // Urgent playback data wins over whole-song download-ahead. Once
+            // the disk cap is reached, retain the existing three-fragment window.
             let next = {
-                let mut state = worker_cache.state.lock().unwrap();
-                state.chunks.retain(|i, _| *i >= index && *i <= index + 2);
+                let state = worker_cache.state.lock().unwrap();
+                let missing = |i: &usize| !state.contains(*i) && !state.errors.contains_key(i);
                 (index..=(index + 2).min(segments.len() - 1))
-                    .find(|i| !state.chunks.contains_key(i))
+                    .find(missing)
+                    .or_else(|| {
+                        (state.disk.can_prefetch() && state.errors.is_empty())
+                            .then(|| (0..segments.len()).find(missing))
+                            .flatten()
+                    })
             };
             if let Some(next) = next {
-                tokio::select! {
-                    changed = rx.changed() => { if changed.is_err() { break; } }
-                    data = download(&client, &segments[next].url) => {
-                        let mut state = worker_cache.state.lock().unwrap();
-                        match data {
-                            Ok(data) => { state.chunks.insert(next, Arc::new(data)); }
-                            Err(e) => { state.error = Some(e.to_string()); worker_cache.ready.notify_all(); break; }
+                let pending = download(&client, &segments[next].url);
+                tokio::pin!(pending);
+                let data = loop {
+                    tokio::select! {
+                        changed = rx.changed() => {
+                            if changed.is_err() { break 'buffer; }
+                            let Some(latest) = *rx.borrow_and_update() else { break 'buffer; };
+                            let state = worker_cache.state.lock().unwrap();
+                            // Keep useful in-flight bytes instead of restarting on
+                            // every segment boundary; reprioritize an actual seek miss.
+                            if (!state.contains(latest) && next != latest)
+                                || (!(latest..=latest + 2).contains(&next)
+                                    && (latest..=(latest + 2).min(segments.len() - 1))
+                                        .any(|i| !state.contains(i) && !state.errors.contains_key(&i)))
+                            { continue 'buffer; }
                         }
-                        worker_cache.ready.notify_all();
+                        data = &mut pending => break data,
                     }
-                }
+                };
+                let cache = worker_cache.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mut state = cache.state.lock().unwrap();
+                    let result = data.and_then(|data| state.insert(next, Arc::new(data)));
+                    if let Err(error) = result {
+                        state.errors.insert(next, error.to_string());
+                    }
+                    cache.ready.notify_all();
+                })
+                .await;
             } else if rx.changed().await.is_err() {
                 break;
             }
@@ -429,8 +525,7 @@ pub async fn source(manifest: Manifest) -> Result<DashSource> {
             manifest: manifest.clone(),
             init: init.clone(),
             cache: cache.clone(),
-            client: seek_client,
-            runtime,
+            request: tx.clone(),
             prepared: Arc::new(Mutex::new(None)),
             channels,
         };
@@ -460,32 +555,7 @@ impl DashSource {
             offset < self.manifest.segments[index].duration,
             "Seek exceeds fragment duration"
         );
-        self.request.send_if_modified(|current| {
-            if *current == Some(index) {
-                false
-            } else {
-                *current = Some(index);
-                true
-            }
-        });
-        let state = self.cache.state.lock().unwrap();
-        let (state, wait) = self
-            .cache
-            .ready
-            .wait_timeout_while(state, Duration::from_secs(30), |s| {
-                !s.chunks.contains_key(&index) && s.error.is_none()
-            })
-            .unwrap();
-        if let Some(error) = &state.error {
-            bail!("{error}");
-        }
-        ensure!(!wait.timed_out(), "DASH buffering timed out");
-        let data = state
-            .chunks
-            .get(&index)
-            .context("Missing audio fragment")?
-            .clone();
-        drop(state);
+        let data = self.seeker.data(index)?;
         if index == self.index + 1 && offset.is_zero() {
             self.decoder.advance(&self.init, &data)?;
         } else {
@@ -555,29 +625,15 @@ impl Source for DashSource {
             self.index = prepared.index;
             self.exhausted = false;
             let mut state = self.cache.state.lock().unwrap();
-            state
-                .chunks
-                .retain(|i, _| *i >= self.index && *i <= self.index + 2);
+            state.move_to(self.index);
             state.chunks.insert(self.index, prepared.data);
             let _ = self.request.send(Some(self.index));
             return Ok(());
         }
-        if self.manifest.codec != Codec::Flac {
-            self.seeker
-                .prepare(pos)
-                .map_err(|e| SeekError::Other(Box::new(std::io::Error::other(e.to_string()))))?;
-            return self.try_seek(pos);
-        }
-        let index = self
-            .manifest
-            .segments
-            .partition_point(|s| s.start <= pos)
-            .saturating_sub(1);
-        self.load(
-            index,
-            pos.saturating_sub(self.manifest.segments[index].start),
-        )
-        .map_err(|e| SeekError::Other(Box::new(std::io::Error::other(e.to_string()))))
+        self.seeker
+            .prepare(pos)
+            .map_err(|e| SeekError::Other(Box::new(std::io::Error::other(e.to_string()))))?;
+        self.try_seek(pos)
     }
 }
 impl Drop for DashSource {
