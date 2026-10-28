@@ -85,13 +85,22 @@ impl Pool {
             (1..=MAX_CHANNELS as u16).contains(&channels) && (1..=MAX_RATE).contains(&rate),
             "Unsupported decoded audio format"
         );
-        self.0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_WORKERS).then_some(n + 1)
-            })
-            .map_err(|_| {
-                anyhow::anyhow!("Previous audio work is still stopping. Please retry shortly.")
-            })?;
+        let mut active = self.0.load(Ordering::Acquire);
+        loop {
+            ensure!(
+                active < MAX_WORKERS,
+                "Previous audio work is still stopping. Please retry shortly."
+            );
+            match self.0.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => active = observed,
+            }
+        }
         let permit = Permit(self.0.clone());
         // About 250–500 ms, at most 4 MiB per handoff. Power-of-two frame
         // capacity keeps wrapping counters correct even for multichannel data.
