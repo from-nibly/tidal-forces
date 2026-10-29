@@ -12,7 +12,8 @@
 - Do not run all ignored tests: live playlist and folder round trips mutate an account.
   Folder probes require separate explicit temporary-object authorization; see
   `docs/folder-validation.md`. The Secret Service contract must use its documented
-  isolated D-Bus invocation.
+  isolated D-Bus invocation. Output recovery's opt-in contract must use the private
+  null-ALSA runner documented in `docs/output-validation.md`, never live output.
 - Keep the running review preview unchanged during development. Check playback and
   obtain approval for replacement; quit gracefully, never force-close unsaved sign-in.
 

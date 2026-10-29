@@ -35,6 +35,126 @@ fn stream() -> (Stream, std::thread::JoinHandle<()>) {
         server,
     )
 }
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "Requires documented private null-ALSA configuration; never run against real output"]
+async fn output_recovery_on_isolated_null_alsa() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::env::var("TIDAL_TEST_ISOLATED_NULL_OUTPUT").as_deref(),
+        Ok("1")
+    );
+    let config = std::path::PathBuf::from(std::env::var_os("ALSA_CONFIG_PATH").unwrap());
+    assert!(
+        config.starts_with("/tmp")
+            && config
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("tidal-v030-null-")
+    );
+    assert_eq!(
+        std::fs::metadata(config.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "pcm.!default { type tidal_test_missing_plugin }\n"
+    );
+    fn receive(rx: &mpsc::Receiver<Event>, matches: impl Fn(&Event) -> bool) -> Event {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let event = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            if matches(&event) {
+                return event;
+            }
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let player = Player::new(Events::fixture(tx));
+    let id = player.reserve();
+    let (source, server) = stream();
+    player.load(id, source, 0).await.unwrap();
+    server.join().unwrap();
+    let Event::OutputLost {
+        generation, epoch, ..
+    } = receive(&rx, |e| matches!(e, Event::OutputLost { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!(generation, id);
+    std::fs::write(&config, "pcm.!default { type null }\n").unwrap();
+    std::fs::File::open(&config)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(2))
+        .unwrap();
+    // A healthy endpoint alone, or a new track generation, must not resume output.
+    let id = player.reserve();
+    let (source, server) = stream();
+    player.load(id, source, 0).await.unwrap();
+    server.join().unwrap();
+    let Event::OutputLost {
+        generation,
+        epoch: again,
+        ..
+    } = receive(&rx, |e| matches!(e, Event::OutputLost { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!((generation, again), (id, epoch));
+    player.retry_output(epoch);
+    let id = player.reserve();
+    let (source, server) = stream();
+    player.load(id, source, 0).await.unwrap();
+    server.join().unwrap();
+    let event = receive(&rx, |e| {
+        matches!(e, Event::Playing { .. } | Event::OutputLost { .. })
+    });
+    assert!(matches!(event, Event::Playing { generation, .. } if generation == id));
+    // Exercise the real owner loop's fault path without an audible/hardware test.
+    player.tx.send(Command::FailOutput).unwrap();
+    let Event::OutputLost {
+        generation,
+        epoch: newer,
+        position,
+    } = receive(&rx, |e| matches!(e, Event::OutputLost { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!((generation, position), (id, Some(0)));
+    assert!(newer > epoch);
+    player.retry_output(epoch); // stale acknowledgement must not reopen anything
+    let id = player.reserve();
+    let (source, server) = stream();
+    player.load(id, source, 0).await.unwrap();
+    server.join().unwrap();
+    let Event::OutputLost {
+        generation, epoch, ..
+    } = receive(&rx, |e| matches!(e, Event::OutputLost { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!((generation, epoch), (id, newer));
+    player.retry_output(newer);
+    let id = player.reserve();
+    let (source, server) = stream();
+    player.load(id, source, 0).await.unwrap();
+    server.join().unwrap();
+    assert!(
+        matches!(receive(&rx, |e| matches!(e, Event::Playing { .. } | Event::OutputLost { .. })), Event::Playing { generation, .. } if generation == id)
+    );
+    player.stop();
+}
+
 fn key(generation: u64) -> NextKey {
     NextKey {
         user: 7,

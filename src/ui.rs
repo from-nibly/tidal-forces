@@ -147,6 +147,7 @@ pub struct App {
     queue: playback_next::PlaybackQueue,
     next_attempt: Option<crate::audio::NextKey>,
     next_budget: (u64, u8),
+    output_fault: Option<u64>,
     queue_open: bool,
     context_generation: u64,
     context_loading: bool,
@@ -306,6 +307,7 @@ impl App {
             queue: Queue::default().into(),
             next_attempt: None,
             next_budget: (0, 0),
+            output_fault: None,
             queue_open: false,
             context_generation: 0,
             context_loading: false,
@@ -1137,9 +1139,30 @@ impl App {
                     self.loading = false;
                     self.error = Some(message);
                 }
-                Event::AudioError(message) => {
-                    self.audio_available = false;
-                    self.error = Some(message);
+                Event::OutputLost {
+                    epoch,
+                    generation,
+                    position,
+                } => {
+                    self.sync_next(false);
+                    if generation != self.play_generation {
+                        continue;
+                    }
+                    self.sync_next(true);
+                    if generation != self.play_generation {
+                        continue;
+                    }
+                    if let Some(position) = position {
+                        self.position = position;
+                    }
+                    self.output_fault = Some(epoch);
+                    self.paused = true;
+                    self.paused_since = None;
+                    self.buffering = false;
+                    self.starved_generation = None;
+                    self.ended = false;
+                    self.actual_quality.clear();
+                    self.error = Some(crate::audio_output::LOST_MESSAGE.into());
                 }
                 Event::Error(message) => {
                     self.pkce_wait = false;
@@ -2178,6 +2201,13 @@ impl App {
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(error).color(Color32::from_rgb(255, 196, 192)));
+                        if self.output_fault.is_some()
+                            && self.paused
+                            && self.queue.current().is_some()
+                            && ui.small_button("Retry output").clicked()
+                        {
+                            self.toggle();
+                        }
                         if ui.small_button("Dismiss").clicked() {
                             self.error = None;
                         }

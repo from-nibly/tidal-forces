@@ -205,6 +205,76 @@ fn account_mismatch_stops_claimed_audio_instead_of_advancing_wrong_queue() {
     assert_eq!(app.play_generation, 2);
 }
 #[test]
+fn output_loss_pauses_at_rendered_position_and_requires_an_explicit_retry() {
+    let (mut app, events, mut requests) = playing();
+    let request = prepare(&mut app, &mut requests, false);
+    let occurrence = app.queue.current_entry().unwrap().occurrence;
+    events
+        .send(Event::OutputLost {
+            epoch: 1,
+            generation: 0,
+            position: Some(157),
+        })
+        .unwrap();
+    app.events();
+    assert!(app.paused && !app.buffering && app.audio_available);
+    assert_eq!(app.position, 157);
+    assert_eq!(app.queue.current_entry().unwrap().occurrence, occurrence);
+    assert!(app.actual_quality.is_empty());
+    assert!(!app.backend.player.fixture_claim_next(&request));
+    assert!(
+        requests.try_recv().is_err(),
+        "Never automatically authorize/restart playback"
+    );
+    app.toggle();
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Request::Play {
+            generation: 2,
+            id: 1,
+            position: 157,
+            ..
+        })
+    ));
+    assert!(!app.paused && app.buffering);
+}
+#[test]
+fn stale_output_loss_cannot_cancel_a_valid_prepared_successor() {
+    let (mut app, events, mut requests) = playing();
+    let request = prepare(&mut app, &mut requests, false);
+    events
+        .send(Event::OutputLost {
+            epoch: 1,
+            generation: 99,
+            position: Some(1),
+        })
+        .unwrap();
+    app.events();
+    assert!(!app.paused);
+    assert_eq!(app.position, 151);
+    assert!(app.error.is_none());
+    assert!(app.backend.player.fixture_claim_next(&request));
+}
+#[test]
+fn output_loss_after_claim_preserves_the_new_occurrence() {
+    let (mut app, events, mut requests) = playing();
+    prepare(&mut app, &mut requests, true);
+    events
+        .send(Event::OutputLost {
+            epoch: 1,
+            generation: 1,
+            position: Some(2),
+        })
+        .unwrap();
+    app.events();
+    assert_eq!(app.queue.current().unwrap().id, 2);
+    assert_eq!(app.play_generation, 1);
+    assert_eq!(app.position, 2);
+    assert!(app.paused && app.actual_quality.is_empty());
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn pause_after_claim_preserves_next_occurrence_and_pause_intent() {
     let (mut app, _, mut requests) = playing();
     prepare(&mut app, &mut requests, true);

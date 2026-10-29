@@ -181,6 +181,11 @@ impl App {
     }
 
     pub(super) fn toggle(&mut self) {
+        if self.paused
+            && let Some(epoch) = self.output_fault.take()
+        {
+            self.backend.player.retry_output(epoch);
+        }
         self.sync_next(true);
         self.next_attempt = None;
         if self.queue.current().is_none() {

@@ -5,6 +5,7 @@ mod audio;
 mod audio_buffer;
 mod audio_handoff;
 mod audio_meter;
+mod audio_output;
 #[cfg(test)]
 mod audio_tests;
 mod auth;
@@ -302,9 +303,8 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                     );
                     return Ok(());
                 }
-                Event::Error(e)
-                | Event::AudioError(e)
-                | Event::PlaybackError { message: e, .. } => anyhow::bail!(e),
+                Event::Error(e) | Event::PlaybackError { message: e, .. } => anyhow::bail!(e),
+                Event::OutputLost { .. } => anyhow::bail!("Audio output is unavailable"),
                 _ => {}
             }
         }

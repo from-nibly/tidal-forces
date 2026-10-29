@@ -216,6 +216,15 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Output recovery (v0.30.0)
+
+Missing or failed output no longer requires restarting the app. Playback pauses,
+preserves its occurrence/position, and requires explicit Play after choosing the
+desired system output. The app does not search other devices on open failure.
+This does **not** detect a healthy virtual endpoint being rerouted by the OS;
+physical-device selection/headphone-loss protection remain separate work.
+See [output validation](docs/output-validation.md). Approved after native review.
+
 ## Prepared-next playback (v0.29.0)
 
 One known queued successor can be prepared near the end of the current song.

@@ -1,13 +1,12 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.28.0 published and installed; P4 prepared-next work in development.**
-Published/installed baseline: v0.27.0 (`0c15ddef8c21`); published managed pin `e48c3a0`.
-Scoped installation used deployed-source commit `dcde66c` on the exactly reproduced
-baseline, preserving protected services and the separately approved input setting
-without deploying unrelated reconciled master changes.
-The v0.27 organization bundle and long-pause fix passed combined native review.
-The operator confirmed the pause fix and approved publication and installation.
-314 normal tests and strict Clippy passed for v0.27 on the new NixOS machine.
+**Status: v0.29.0 published and installed; P4 output recovery in development.**
+Published/installed baseline: v0.29.0 (`631423bbdaa0`); published managed pin `ad64197`.
+Scoped installation used deployed-source commit `e33777e` on the exactly reproduced
+baseline, preserving the approved preview, protected services and input setting
+without deploying unrelated canonical source changes.
+The prepared-next/resampling slice passed native review, 360 normal tests,
+strict Clippy on both toolchains, isolated contracts and native artifact checks.
 Keep the original phase order: radio continuation stays in P5. Preserve the running
 review preview; new releases and live audio/device tests remain separately gated.
 Tracks/count and loading controls share the Play/Shuffle row; Copy links,
@@ -35,7 +34,23 @@ Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
 
-## Approved P4b slice (v0.29.0)
+## Approved P4c slice (v0.30.0)
+
+Output initialization and stream errors are recoverable without restarting the app.
+The controller opens only the system default; it never searches other devices after
+failure. Stream faults gate PCM at complete-frame boundaries, preserve position and
+occurrence, cancel preparation and require explicit Play to retry. Fault epochs
+prevent queued loads, automatic next-track generations or stale acknowledgements
+from reopening output. Native error callbacks only publish an atomic signal.
+
+This is a bounded recovery slice, not an in-app picker or physical-route monitor.
+An OS-managed virtual endpoint can silently reroute to speakers without a CPAL
+error. Persistent physical output selection and headphone-loss protection remain
+P4 gates, with separately authorized real-device validation. Synthetic/null-ALSA
+contracts are documented in `docs/output-validation.md`. Native review is approved;
+preserve the running preview during publication and scoped installation.
+
+## Released P4b slice (v0.29.0)
 
 Prepare one known successor near the final 30 seconds. Compatible FLAC sources
 with equal decoded rate/channels join through one continuous PCM source and sink.
@@ -53,8 +68,8 @@ This slice also corrects v0.28's one-frame PCM spans, which restarted Rodio's ra
 converter when source/output rates differed. Synthetic output now matches a
 constant-format reference. Exact joins, cancel/claim races, buffering accounting,
 queue/history/seek guards and offline-fixture FLAC promotion are covered by tests.
-Native preview review is approved; publication and scoped installation are authorized.
-Preserve the running preview during installation.
+Approved, published and installed through the verified GitHub artifact and a
+Tidal-only Home Manager update. The approved preview was preserved.
 
 ## Released P4a slice (v0.28.0)
 

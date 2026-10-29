@@ -40,7 +40,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "folder-move",
             "cache-settings",
             "cached-playlist",
-            "stream-buffering"
+            "stream-buffering",
+            "output-lost"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -411,6 +412,12 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
     if page == "stream-buffering" {
         app.paused = false;
         app.starved_generation = Some(app.play_generation);
+    }
+    if page == "output-lost" {
+        app.paused = true;
+        app.actual_quality.clear();
+        app.output_fault = Some(1);
+        app.error = Some(crate::audio_output::LOST_MESSAGE.into());
     }
     if page == "cached-playlist" {
         app.browse_loaded();

@@ -341,7 +341,11 @@ pub enum Event {
         generation: u64,
         message: String,
     },
-    AudioError(String),
+    OutputLost {
+        epoch: u64,
+        generation: u64,
+        position: Option<u64>,
+    },
     Error(String),
 }
 
@@ -351,6 +355,13 @@ pub struct Events {
     ctx: eframe::egui::Context,
 }
 impl Events {
+    #[cfg(test)]
+    pub(crate) fn fixture(tx: mpsc::Sender<Event>) -> Self {
+        Self {
+            tx,
+            ctx: eframe::egui::Context::default(),
+        }
+    }
     pub fn send(&self, event: Event) {
         let _ = self.tx.send(event);
         self.ctx.request_repaint();

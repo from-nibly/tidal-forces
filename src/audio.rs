@@ -192,6 +192,9 @@ enum Command {
     CancelNext(u64),
     Pause(bool),
     Volume(f32),
+    RetryOutput(u64),
+    #[cfg(test)]
+    FailOutput,
     Stop,
 }
 
@@ -299,18 +302,9 @@ impl Player {
         let visualizer = Arc::new(crate::visualizer::Capture::default());
         let capture = visualizer.clone();
         std::thread::spawn(move || {
-            let mut output = match OutputStreamBuilder::open_default_stream() {
-                Ok(s) => s,
-                Err(_) => {
-                    events.send(Event::AudioError(
-                        "No audio output device. Connect one and restart Tidal Forces.".into(),
-                    ));
-                    return;
-                }
-            };
-            output.log_on_drop(false);
-            let mut sink = Sink::connect_new(output.mixer());
+            let mut output = crate::audio_output::Output::default();
             let mut volume = 0.65;
+            let mut recovery = crate::audio_output::Recovery::default();
             let mut active: Option<Arc<Frame>> = None;
             let mut pending: Option<Arc<Prepared>> = None;
             let mut slot = Slot::default();
@@ -330,6 +324,55 @@ impl Player {
                         events.send(Event::Transition(transition.generation));
                     }
                 }
+                if output.failed() {
+                    // Close/join the output before resolving its last possible claim.
+                    output.close();
+                    if let Some(prepared) = pending.take() {
+                        if prepared.request.boundary.claimed() {
+                            if let Some(transition) = prepared.promote(&sessions, &current) {
+                                active = Some(prepared.frame.clone());
+                                events.send(Event::Transition(transition.generation));
+                            }
+                            prepared.frame.feedback.cancel();
+                        } else {
+                            prepared.cancel();
+                        }
+                    }
+                    slot.clear();
+                    let mut state = staged.lock().unwrap();
+                    if state
+                        .as_ref()
+                        .is_some_and(|s| !s.request.boundary.claimed())
+                        && let Some(state) = state.take()
+                    {
+                        state.request.boundary.force_cancel();
+                        if let Some(ready) = state.ready {
+                            ready.cancel();
+                        }
+                    }
+                    drop(state);
+                    capture.playing(false);
+                    capture.invalidate();
+                    let id = current.load(Ordering::Acquire);
+                    recovery.fail();
+                    let position = active.take().and_then(|frame| {
+                        frame.feedback.cancel();
+                        if frame.id != id {
+                            return None;
+                        }
+                        events.send(Event::Listening {
+                            generation: id,
+                            rendered: frame.rendered(),
+                            elapsed: frame.elapsed(),
+                        });
+                        Some(frame.position())
+                    });
+                    events.send(Event::OutputLost {
+                        generation: id,
+                        position,
+                        epoch: recovery.epoch(),
+                    });
+                }
                 match command {
                     Ok(Command::Load(id, pcm, quality, feedback, start)) => {
                         if id != current.load(Ordering::SeqCst) {
@@ -343,14 +386,22 @@ impl Player {
                         }
                         slot.clear();
                         slot = Slot::default();
-                        sink.stop();
-                        sink = Sink::connect_new(output.mixer());
-                        sink.set_volume(volume);
-                        sink.pause();
+                        if recovery.blocked() || output.reset(volume).is_err() {
+                            if !recovery.blocked() {
+                                recovery.fail();
+                            }
+                            feedback.cancel();
+                            events.send(Event::OutputLost {
+                                generation: id,
+                                position: Some(start),
+                                epoch: recovery.epoch(),
+                            });
+                            continue;
+                        }
                         capture.invalidate();
                         capture.playing(false);
                         let frame = Frame::new(id, &pcm, feedback, start);
-                        sink.append(Chain::new(
+                        output.append(Chain::new(
                             pcm,
                             frame.clone(),
                             slot.clone(),
@@ -395,14 +446,17 @@ impl Player {
                     Ok(Command::Pause(paused)) => {
                         capture.playing(!paused);
                         if paused {
-                            sink.pause();
+                            output.sink.pause();
                         } else {
-                            sink.play();
+                            output.sink.play();
                         }
                     }
+                    #[cfg(test)]
+                    Ok(Command::FailOutput) => output.simulate_failure(),
+                    Ok(Command::RetryOutput(epoch)) => recovery.retry(epoch),
                     Ok(Command::Volume(v)) => {
                         volume = v;
-                        sink.set_volume(v);
+                        output.sink.set_volume(v);
                     }
                     Ok(Command::Stop) => {
                         capture.playing(false);
@@ -413,10 +467,13 @@ impl Player {
                             prepared.cancel();
                         }
                         slot.clear();
-                        sink.stop();
+                        output.sink.stop();
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                if output.failed() {
+                    continue;
                 }
                 if let Some(frame) = &active {
                     let id = frame.id;
@@ -437,20 +494,20 @@ impl Player {
                         }
                         capture.playing(false);
                         frame.feedback.cancel();
-                        sink.stop();
+                        output.sink.stop();
                         active = None;
                         continue;
                     }
                     if frame.feedback.failed() {
                         capture.playing(false);
                         frame.feedback.cancel();
-                        sink.stop();
+                        output.sink.stop();
                         active = None;
                         events.send(Event::PlaybackError { generation: id, message: "Audio decoding failed or changed format. Press play to retry from this position.".into() });
                         continue;
                     }
                     let buffering = frame.feedback.buffering();
-                    capture.playing(!sink.is_paused() && !buffering);
+                    capture.playing(!output.sink.is_paused() && !buffering);
                     if buffering != reported_buffering {
                         events.send(Event::StreamBuffering {
                             generation: id,
@@ -467,7 +524,10 @@ impl Player {
                         });
                         reported = rendered;
                     }
-                    if sink.empty() {
+                    if output.sink.empty() {
+                        if output.failed() {
+                            continue;
+                        }
                         if pending
                             .as_ref()
                             .is_some_and(|p| p.request.boundary.claimed())
@@ -481,7 +541,7 @@ impl Player {
                         });
                         active = None;
                         events.send(Event::Ended(id));
-                    } else if !sink.is_paused() {
+                    } else if !output.sink.is_paused() {
                         events.send(Event::Position {
                             generation: id,
                             seconds: frame.position(),
@@ -718,6 +778,9 @@ impl Player {
     pub fn stop(&self) {
         self.reserve();
     }
+    pub fn retry_output(&self, epoch: u64) {
+        let _ = self.tx.send(Command::RetryOutput(epoch));
+    }
     pub fn pause(&self, paused: bool) {
         if paused {
             self.visualizer.playing(false);
@@ -845,7 +908,7 @@ pub(crate) async fn decode(reader: StreamDownload<AudioStorage>) -> Result<Audio
 
 pub fn audio_test() -> Result<()> {
     use rodio::Source;
-    let mut output = OutputStreamBuilder::open_default_stream()?;
+    let mut output = OutputStreamBuilder::from_default_device()?.open_stream()?;
     output.log_on_drop(false);
     let sink = Sink::connect_new(output.mixer());
     sink.append(
