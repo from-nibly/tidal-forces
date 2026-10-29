@@ -100,6 +100,16 @@ impl Queue {
     pub fn current_entry(&self) -> Option<&Entry> {
         self.current.as_ref()
     }
+    /// Only an already determined successor; context-wrap shuffles are not guessed.
+    pub fn next_natural(&self) -> Option<&Entry> {
+        if self.repeat == Repeat::Track && self.current.is_some() {
+            return self.current.as_ref();
+        }
+        self.manual
+            .front()
+            .or_else(|| self.redo.last())
+            .or_else(|| self.upcoming.front().map(|&index| &self.context[index]))
+    }
     pub fn manual(&self) -> &VecDeque<Entry> {
         &self.manual
     }

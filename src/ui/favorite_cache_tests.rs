@@ -34,7 +34,7 @@ fn request(
 fn prefetch_publishes_only_complete_unique_reads_without_touching_playback_or_browse() {
     let (_, mut app, _, mut requests) = fixture();
     app.tracks = vec![track(99)];
-    app.queue
+    app.queue_mut()
         .start(vec![track(88)], 0, "Current".into(), None)
         .unwrap();
     app.paused = false;

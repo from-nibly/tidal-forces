@@ -124,10 +124,10 @@ fn back_forward_restore_occurrences_options_selection_and_scroll_without_playing
     app.track_selection.select(2, false, false);
     app.track_selection.pending_focus = Some(2);
     app.browse_cache.scroll = 321.;
-    app.queue
+    app.queue_mut()
         .start(vec![track(9)], 0, "Playing".into(), None)
         .unwrap();
-    app.queue.add(track(8), false).unwrap();
+    app.queue_mut().add(track(8), false).unwrap();
     app.paused = false;
     let revision = app.queue.revision();
     app.query = "second search".into();

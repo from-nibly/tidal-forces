@@ -316,7 +316,7 @@ impl App {
     }
     fn play_history_track(&mut self, track: Track) {
         match self
-            .queue
+            .queue_mut()
             .start(vec![track], 0, "Listening history".into(), None)
         {
             Ok(()) => {

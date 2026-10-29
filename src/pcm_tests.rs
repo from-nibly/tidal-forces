@@ -10,6 +10,40 @@ fn wait_for(mut ready: impl FnMut() -> bool) {
     }
 }
 
+#[test]
+fn output_rate_conversion_matches_constant_format_reference() {
+    for channels in [1, 2] {
+        for input_rate in [44100, 48000, 96000, 192000] {
+            for output_rate in [44100, 48000] {
+                let samples: Vec<f32> = (0..usize::from(channels) * 128)
+                    .map(|i| (i % 23) as f32 / 23. - 0.5)
+                    .collect();
+                let reference =
+                    rodio::buffer::SamplesBuffer::new(channels, input_rate, samples.clone());
+                let expected: Vec<_> =
+                    rodio::source::UniformSourceIterator::new(reference, 2, output_rate).collect();
+                let pool = Pool::default();
+                let (source, feedback) = pool
+                    .start(Box::new(rodio::buffer::SamplesBuffer::new(
+                        channels, input_rate, samples,
+                    )))
+                    .unwrap();
+                wait_for(|| feedback.0.done.load(Ordering::Acquire));
+                let actual: Vec<_> =
+                    rodio::source::UniformSourceIterator::new(source, 2, output_rate).collect();
+                assert_eq!(
+                    actual.len(),
+                    expected.len(),
+                    "{channels} channels: {input_rate} → {output_rate}"
+                );
+                assert_eq!(actual, expected);
+                drop(feedback);
+                wait_for(|| pool.0.load(Ordering::Acquire) == 0);
+            }
+        }
+    }
+}
+
 struct HeldSource {
     samples: std::vec::IntoIter<f32>,
     gate: Option<mpsc::Receiver<()>>,

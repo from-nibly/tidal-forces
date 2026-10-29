@@ -3,6 +3,7 @@ mod api;
 mod artwork_cache;
 mod audio;
 mod audio_buffer;
+mod audio_handoff;
 mod audio_meter;
 #[cfg(test)]
 mod audio_tests;

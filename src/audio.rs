@@ -1,4 +1,5 @@
 use crate::api::{Stream, StreamSource};
+use crate::audio_handoff::{Boundary, Chain, Frame, Slot};
 use crate::backend::{Event, Events};
 use anyhow::Result;
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
@@ -30,6 +31,7 @@ impl Drop for DownloadGuard {
 
 struct Loaded {
     generation: u64,
+    flac: bool,
     decoder: Arc<crate::audio_buffer::Reusable>,
     quality: String,
     seeker: Option<crate::dash::SeekHandle>,
@@ -43,6 +45,136 @@ impl Drop for Loaded {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextKey {
+    pub user: u64,
+    pub generation: u64,
+    pub revision: u64,
+    pub current: u64,
+    pub occurrence: u64,
+    pub track: u64,
+    pub quality: String,
+    pub duration: u64,
+}
+#[derive(Clone)]
+pub struct NextRequest {
+    pub key: NextKey,
+    boundary: Arc<Boundary>,
+}
+struct NextState {
+    request: NextRequest,
+    ready: Option<Arc<Prepared>>,
+}
+struct Prepared {
+    request: NextRequest,
+    loaded: Mutex<Option<Loaded>>,
+    previous: Arc<Frame>,
+    frame: Arc<Frame>,
+    quality: String,
+}
+pub struct Transition {
+    pub key: NextKey,
+    pub generation: u64,
+    pub quality: String,
+    pub rendered: Duration,
+    pub elapsed: Duration,
+    pub position: u64,
+}
+impl Prepared {
+    fn promote(&self, loaded: &Mutex<Option<Loaded>>, current: &AtomicU64) -> Option<Transition> {
+        let mut loaded = loaded.lock().unwrap();
+        let boundary = &self.request.boundary;
+        if !boundary.claimed() {
+            return None;
+        }
+        let _ = current.compare_exchange(
+            boundary.from,
+            boundary.to,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        if current.load(Ordering::SeqCst) != boundary.to {
+            return None;
+        }
+        if let Some(next) = self.loaded.lock().unwrap().take() {
+            *loaded = Some(next);
+        }
+        Some(Transition {
+            key: self.request.key.clone(),
+            generation: boundary.to,
+            quality: self.quality.clone(),
+            rendered: self.previous.rendered(),
+            elapsed: boundary.elapsed(),
+            position: self.frame.position(),
+        })
+    }
+    fn cancel(&self) {
+        self.request.boundary.force_cancel();
+        self.frame.feedback.cancel();
+        self.loaded.lock().unwrap().take();
+    }
+}
+
+struct NextOutput<'a> {
+    staged: &'a Mutex<Option<NextState>>,
+    sessions: &'a Mutex<Option<Loaded>>,
+    generation: &'a Arc<AtomicU64>,
+    capture: &'a Arc<crate::visualizer::Capture>,
+    slot: &'a Slot,
+}
+impl NextOutput<'_> {
+    fn arm(
+        &self,
+        previous: Option<&Arc<Frame>>,
+        request: NextRequest,
+        pcm: crate::pcm::PcmSource,
+        session: Loaded,
+        feedback: crate::pcm::Feedback,
+    ) -> Option<Arc<Prepared>> {
+        let mut state = self.staged.lock().unwrap();
+        let matching = state
+            .as_mut()
+            .filter(|s| s.request.boundary.to == request.boundary.to);
+        let previous = previous.filter(|f| f.id == request.key.generation);
+        let compatible = self
+            .sessions
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|s| s.generation == request.key.generation && s.flac)
+            && session.flac
+            && previous.is_some_and(|f| f.format == (pcm.channels(), pcm.sample_rate()));
+        if let (Some(state), Some(previous)) = (matching, previous)
+            && compatible
+            && request.boundary.preparing()
+            && self.generation.load(Ordering::Acquire) == request.key.generation
+        {
+            let frame = Frame::new(request.boundary.to, &pcm, feedback, 0);
+            let prepared = Arc::new(Prepared {
+                quality: session.quality.clone(),
+                loaded: Mutex::new(Some(session)),
+                previous: previous.clone(),
+                frame: frame.clone(),
+                request: request.clone(),
+            });
+            state.ready = Some(prepared.clone());
+            if self.slot.arm(
+                pcm,
+                frame,
+                request.boundary.clone(),
+                self.capture.clone(),
+                self.generation.clone(),
+            ) {
+                return Some(prepared);
+            }
+            prepared.cancel();
+        } else {
+            request.boundary.force_cancel();
+        }
+        None
+    }
+}
+
 enum Command {
     Load(
         u64,
@@ -51,6 +183,13 @@ enum Command {
         crate::pcm::Feedback,
         u64,
     ),
+    Prepare(
+        NextRequest,
+        crate::pcm::PcmSource,
+        Box<Loaded>,
+        crate::pcm::Feedback,
+    ),
+    CancelNext(u64),
     Pause(bool),
     Volume(f32),
     Stop,
@@ -60,6 +199,8 @@ enum Command {
 pub struct Player {
     tx: mpsc::Sender<Command>,
     generation: Arc<AtomicU64>,
+    serial: Arc<AtomicU64>,
+    next: Arc<Mutex<Option<NextState>>>,
     pcm: crate::pcm::Pool,
     loaded: Arc<Mutex<Option<Loaded>>>,
     preparing: Arc<tokio::sync::Semaphore>,
@@ -74,6 +215,8 @@ impl Player {
         Self {
             tx,
             generation: Arc::new(AtomicU64::new(0)),
+            serial: Arc::new(AtomicU64::new(0)),
+            next: Arc::new(Mutex::new(None)),
             seek_runtime: Arc::new(OnceLock::new()),
             preparing: Arc::new(tokio::sync::Semaphore::new(2)),
             loaded: Arc::new(Mutex::new(None)),
@@ -92,19 +235,70 @@ impl Player {
             generation: self.generation.load(Ordering::SeqCst),
             decoder,
             quality: "Fixture FLAC".into(),
+            flac: true,
             seeker: None,
             _download: DownloadGuard::default(),
         });
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture_next(&self, request: &NextRequest, claim: bool) {
+        let (previous_pcm, feedback) = self
+            .pcm
+            .start(Box::new(rodio::buffer::SamplesBuffer::new(
+                1,
+                1000,
+                vec![0.; 2],
+            )))
+            .unwrap();
+        let previous = Frame::new(request.key.generation, &previous_pcm, feedback, 0);
+        previous
+            .rendered
+            .store(request.key.duration * 1_000_000_000, Ordering::Release);
+        let (decoder, lease) = crate::audio_buffer::Reusable::new(Box::new(
+            rodio::buffer::SamplesBuffer::new(1, 1000, vec![0.75; 2000]),
+        ));
+        let (pcm, feedback) = self.pcm.start(Box::new(lease)).unwrap();
+        let frame = Frame::new(request.boundary.to, &pcm, feedback, 0);
+        let loaded = Loaded {
+            generation: request.boundary.to,
+            decoder,
+            quality: "Fixture next FLAC".into(),
+            flac: true,
+            seeker: None,
+            _download: DownloadGuard::default(),
+        };
+        let prepared = Arc::new(Prepared {
+            request: request.clone(),
+            quality: loaded.quality.clone(),
+            loaded: Mutex::new(Some(loaded)),
+            previous,
+            frame,
+        });
+        self.next.lock().unwrap().as_mut().unwrap().ready = Some(prepared);
+        request.boundary.fixture_ready();
+        if claim {
+            assert!(self.fixture_claim_next(request));
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_claim_next(&self, request: &NextRequest) -> bool {
+        request
+            .boundary
+            .fixture_claim(&self.generation, Duration::from_secs(request.key.duration))
+    }
+
     pub fn new(events: Events) -> Self {
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(0));
+        let loaded: Arc<Mutex<Option<Loaded>>> = Arc::new(Mutex::new(None));
+        let next: Arc<Mutex<Option<NextState>>> = Arc::new(Mutex::new(None));
         let current = generation.clone();
+        let sessions = loaded.clone();
+        let staged = next.clone();
         let visualizer = Arc::new(crate::visualizer::Capture::default());
         let capture = visualizer.clone();
         std::thread::spawn(move || {
-            // Keep the output device alive on its owner thread, not the render thread.
             let mut output = match OutputStreamBuilder::open_default_stream() {
                 Ok(s) => s,
                 Err(_) => {
@@ -117,49 +311,86 @@ impl Player {
             output.log_on_drop(false);
             let mut sink = Sink::connect_new(output.mixer());
             let mut volume = 0.65;
-            let mut active = None;
-            let mut position_offset = 0;
-            let mut feedback: Option<crate::pcm::Feedback> = None;
+            let mut active: Option<Arc<Frame>> = None;
+            let mut pending: Option<Arc<Prepared>> = None;
+            let mut slot = Slot::default();
             let mut reported_buffering = false;
-            let mut rendered = Arc::new(AtomicU64::new(0));
-            let mut clock_start = std::time::Instant::now();
-            let mut reported = 0;
+            let mut reported = Duration::ZERO;
             loop {
-                match rx.recv_timeout(Duration::from_millis(250)) {
-                    Ok(Command::Load(id, pcm, quality, state, start)) => {
+                let command = rx.recv_timeout(Duration::from_millis(100));
+                if pending
+                    .as_ref()
+                    .is_some_and(|p| p.request.boundary.claimed())
+                {
+                    let prepared = pending.take().unwrap();
+                    if let Some(transition) = prepared.promote(&sessions, &current) {
+                        active = Some(prepared.frame.clone());
+                        reported = Duration::ZERO;
+                        reported_buffering = false;
+                        events.send(Event::Transition(transition.generation));
+                    }
+                }
+                match command {
+                    Ok(Command::Load(id, pcm, quality, feedback, start)) => {
                         if id != current.load(Ordering::SeqCst) {
                             continue;
                         }
-                        if let Some(previous) = feedback.take() {
+                        if let Some(previous) = active.take() {
+                            previous.feedback.cancel();
+                        }
+                        if let Some(previous) = pending.take() {
                             previous.cancel();
                         }
+                        slot.clear();
+                        slot = Slot::default();
                         sink.stop();
                         sink = Sink::connect_new(output.mixer());
                         sink.set_volume(volume);
                         sink.pause();
-                        position_offset = start;
                         capture.invalidate();
                         capture.playing(false);
-                        rendered = Arc::new(AtomicU64::new(0));
-                        clock_start = std::time::Instant::now();
-                        reported = 0;
-                        sink.append(crate::visualizer::Tap::new(
-                            crate::audio_meter::Meter::with_activity(
-                                pcm,
-                                rendered.clone(),
-                                state.activity(),
-                            ),
+                        let frame = Frame::new(id, &pcm, feedback, start);
+                        sink.append(Chain::new(
+                            pcm,
+                            frame.clone(),
+                            slot.clone(),
                             capture.clone(),
                             current.clone(),
-                            id,
                         ));
-                        active = Some(id);
-                        feedback = Some(state);
+                        active = Some(frame);
+                        reported = Duration::ZERO;
                         reported_buffering = false;
                         events.send(Event::Playing {
                             generation: id,
                             quality,
                         });
+                    }
+                    Ok(Command::Prepare(request, pcm, session, feedback)) => {
+                        if let Some(prepared) = (NextOutput {
+                            staged: &staged,
+                            sessions: &sessions,
+                            generation: &current,
+                            capture: &capture,
+                            slot: &slot,
+                        })
+                        .arm(
+                            active.as_ref(),
+                            request,
+                            pcm,
+                            *session,
+                            feedback,
+                        ) {
+                            pending = Some(prepared);
+                        }
+                    }
+                    Ok(Command::CancelNext(id)) => {
+                        if pending
+                            .as_ref()
+                            .is_some_and(|p| p.request.boundary.to == id)
+                        {
+                            pending.take().unwrap().cancel();
+                            slot.clear();
+                        }
                     }
                     Ok(Command::Pause(paused)) => {
                         capture.playing(!paused);
@@ -175,36 +406,50 @@ impl Player {
                     }
                     Ok(Command::Stop) => {
                         capture.playing(false);
-                        if let Some(state) = feedback.take() {
-                            state.cancel();
+                        if let Some(frame) = active.take() {
+                            frame.feedback.cancel();
                         }
+                        if let Some(prepared) = pending.take() {
+                            prepared.cancel();
+                        }
+                        slot.clear();
                         sink.stop();
-                        active = None;
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
-                if let Some(id) = active {
+                if let Some(frame) = &active {
+                    let id = frame.id;
+                    // A just-claimed callback boundary is reconciled on the next
+                    // loop, not mistaken for a superseding manual play/seek.
+                    if pending
+                        .as_ref()
+                        .is_some_and(|p| p.request.boundary.claimed())
+                    {
+                        continue;
+                    }
                     if id != current.load(Ordering::SeqCst) {
-                        capture.playing(false);
-                        if let Some(state) = feedback.take() {
-                            state.cancel();
+                        if pending
+                            .as_ref()
+                            .is_some_and(|p| p.request.boundary.claimed())
+                        {
+                            continue;
                         }
+                        capture.playing(false);
+                        frame.feedback.cancel();
                         sink.stop();
                         active = None;
                         continue;
                     }
-                    if feedback.as_ref().is_some_and(|state| state.failed()) {
+                    if frame.feedback.failed() {
                         capture.playing(false);
-                        if let Some(state) = feedback.take() {
-                            state.cancel();
-                        }
+                        frame.feedback.cancel();
                         sink.stop();
                         active = None;
                         events.send(Event::PlaybackError { generation: id, message: "Audio decoding failed or changed format. Press play to retry from this position.".into() });
                         continue;
                     }
-                    let buffering = feedback.as_ref().is_some_and(|state| state.buffering());
+                    let buffering = frame.feedback.buffering();
                     capture.playing(!sink.is_paused() && !buffering);
                     if buffering != reported_buffering {
                         events.send(Event::StreamBuffering {
@@ -213,54 +458,174 @@ impl Player {
                         });
                         reported_buffering = buffering;
                     }
-                    let nanos = rendered.load(Ordering::Relaxed);
-                    if nanos != reported {
+                    let rendered = frame.rendered();
+                    if rendered != reported {
                         events.send(Event::Listening {
                             generation: id,
-                            rendered: Duration::from_nanos(nanos),
-                            elapsed: clock_start.elapsed(),
+                            rendered,
+                            elapsed: frame.elapsed(),
                         });
-                        reported = nanos;
+                        reported = rendered;
                     }
                     if sink.empty() {
+                        if pending
+                            .as_ref()
+                            .is_some_and(|p| p.request.boundary.claimed())
+                        {
+                            continue;
+                        }
                         capture.playing(false);
+                        events.send(Event::Position {
+                            generation: id,
+                            seconds: frame.position(),
+                        });
                         active = None;
-                        feedback = None;
                         events.send(Event::Ended(id));
                     } else if !sink.is_paused() {
                         events.send(Event::Position {
                             generation: id,
-                            seconds: Duration::from_nanos(nanos)
-                                .as_secs()
-                                .saturating_add(position_offset),
+                            seconds: frame.position(),
                         });
                     }
                 }
             }
-            if let Some(state) = feedback {
-                state.cancel();
+            if let Some(frame) = active {
+                frame.feedback.cancel();
             }
+            if let Some(prepared) = pending {
+                prepared.cancel();
+            }
+            slot.clear();
         });
         Self {
             tx,
             generation,
+            serial: Arc::new(AtomicU64::new(0)),
+            next,
+            loaded,
             seek_runtime: Arc::new(OnceLock::new()),
             preparing: Arc::new(tokio::sync::Semaphore::new(2)),
-            loaded: Arc::new(Mutex::new(None)),
             pcm: crate::pcm::Pool::default(),
             visualizer,
         }
     }
 
     pub fn reserve(&self) -> u64 {
+        self.discard_next();
         let mut loaded = self.loaded.lock().unwrap();
-        let id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let id = self.serial.fetch_add(1, Ordering::SeqCst) + 1;
+        self.generation.store(id, Ordering::SeqCst);
         *loaded = None;
         self.visualizer.playing(false);
         self.visualizer.invalidate();
         let _ = self.tx.send(Command::Stop);
         id
     }
+    fn discard_state(&self, state: NextState) {
+        state.request.boundary.force_cancel();
+        if let Some(ready) = state.ready {
+            ready.cancel();
+        }
+        let _ = self.tx.send(Command::CancelNext(state.request.boundary.to));
+    }
+    fn discard_next(&self) {
+        let state = self.next.lock().unwrap().take();
+        if let Some(state) = state {
+            self.discard_state(state);
+        }
+    }
+    pub fn reconcile_next(&self, cancel: bool) -> Option<Transition> {
+        let mut next = self.next.lock().unwrap();
+        let state = next.as_ref()?;
+        if state.request.boundary.claimed() || (cancel && !state.request.boundary.cancel()) {
+            let state = next.take().unwrap();
+            drop(next);
+            return state.ready?.promote(&self.loaded, &self.generation);
+        }
+        if cancel {
+            let state = next.take().unwrap();
+            drop(next);
+            self.discard_state(state);
+        }
+        None
+    }
+    pub fn begin_next(&self, key: NextKey) -> Option<NextRequest> {
+        self.discard_next();
+        if !self.current(key.generation)
+            || !self
+                .loaded
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|s| s.generation == key.generation && s.flac)
+        {
+            return None;
+        }
+        let id = self.serial.fetch_add(1, Ordering::SeqCst) + 1;
+        let request = NextRequest {
+            boundary: Arc::new(Boundary::new(key.generation, id, key.duration)),
+            key,
+        };
+        *self.next.lock().unwrap() = Some(NextState {
+            request: request.clone(),
+            ready: None,
+        });
+        Some(request)
+    }
+    pub fn has_prepared_next(&self) -> bool {
+        self.next
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|state| state.request.boundary.pending())
+    }
+    pub fn is_preparing(&self, request: &NextRequest) -> bool {
+        request.boundary.preparing() && self.current(request.key.generation)
+    }
+    pub fn fail_next(&self, request: &NextRequest) {
+        let mut next = self.next.lock().unwrap();
+        if next
+            .as_ref()
+            .is_some_and(|s| s.request.boundary.to == request.boundary.to)
+        {
+            let state = next.take().unwrap();
+            drop(next);
+            self.discard_state(state);
+        }
+    }
+    pub async fn prepare_next(&self, request: NextRequest, stream: Stream) -> Result<()> {
+        let _preparing = self.preparing.acquire().await?;
+        if !self.is_preparing(&request) {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            stream.codec.eq_ignore_ascii_case("flac"),
+            "Continuous AAC transitions await priming/padding validation"
+        );
+        let (loaded, lease) = open_stream(request.boundary.to, stream, 0).await?;
+        if !self.is_preparing(&request) {
+            return Ok(());
+        }
+        let (pcm, feedback) = self.pcm.start(Box::new(lease))?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !feedback.ready() {
+            if !self.is_preparing(&request) {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                !feedback.finished() && !feedback.failed() && std::time::Instant::now() < deadline,
+                "Next audio is not ready"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if self.is_preparing(&request) {
+            self.tx
+                .send(Command::Prepare(request, pcm, Box::new(loaded), feedback))
+                .map_err(|_| anyhow::anyhow!("Audio output is unavailable"))?;
+        }
+        Ok(())
+    }
+
     pub fn set_seek_runtime(&self, events: Events) {
         let _ = self
             .seek_runtime
@@ -286,12 +651,17 @@ impl Player {
     }
 
     pub fn reserve_seek(&self, expected: u64) -> Option<u64> {
+        if !self.current(expected) {
+            return None;
+        }
+        self.discard_next();
         let mut loaded = self.loaded.lock().unwrap();
         let loaded = loaded.as_mut()?;
         if loaded.generation != expected || !self.current(expected) {
             return None;
         }
-        let id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let id = self.serial.fetch_add(1, Ordering::SeqCst) + 1;
+        self.generation.store(id, Ordering::SeqCst);
         loaded.generation = id;
         if let Some(seeker) = &loaded.seeker {
             seeker.interrupt();
@@ -363,47 +733,15 @@ impl Player {
         if !self.current(id) {
             return Ok(());
         }
-        let quality = stream.label();
-        let mut seeker = None;
-        let mut download = DownloadGuard::default();
-        let decoder: Box<dyn Source<Item = f32> + Send> = match stream.source {
-            StreamSource::Direct(url) => {
-                let reader = StreamDownload::new_http(
-                    url.parse()?,
-                    audio_storage(),
-                    Settings::default().prefetch_bytes(128 * 1024),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "Unable to buffer the TIDAL stream. Check your connection and try again."
-                    )
-                })?;
-                let cancellation = reader.cancellation_token();
-                download = DownloadGuard(Some(Box::new(move || cancellation.cancel())));
-                Box::new(decode(reader).await?)
-            }
-            StreamSource::Dash(manifest) => {
-                let source = crate::dash::source(manifest).await?;
-                seeker = Some(source.seek_handle());
-                Box::new(source)
-            }
-        };
-        let (decoder, seeker) = prepare_start(decoder, seeker, position).await?;
+        let (session, lease) = open_stream(id, stream, position).await?;
         if self.current(id) {
-            let (decoder, lease) = crate::audio_buffer::Reusable::new(decoder);
             let (pcm, feedback) = self.pcm.start(Box::new(lease))?;
             let mut loaded = self.loaded.lock().unwrap();
             if !self.current(id) {
                 return Ok(());
             }
-            *loaded = Some(Loaded {
-                generation: id,
-                decoder,
-                quality: quality.clone(),
-                seeker,
-                _download: download,
-            });
+            let quality = session.quality.clone();
+            *loaded = Some(session);
             if self
                 .tx
                 .send(Command::Load(id, pcm, quality, feedback, position))
@@ -415,6 +753,53 @@ impl Player {
         }
         Ok(())
     }
+}
+
+async fn open_stream(
+    id: u64,
+    stream: Stream,
+    position: u64,
+) -> Result<(Loaded, crate::audio_buffer::Lease)> {
+    let quality = stream.label();
+    let flac = stream.codec.eq_ignore_ascii_case("flac");
+    let mut seeker = None;
+    let mut download = DownloadGuard::default();
+    let decoder: Box<dyn Source<Item = f32> + Send> = match stream.source {
+        StreamSource::Direct(url) => {
+            let reader = StreamDownload::new_http(
+                url.parse()?,
+                audio_storage(),
+                Settings::default().prefetch_bytes(128 * 1024),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Unable to buffer the TIDAL stream. Check your connection and try again."
+                )
+            })?;
+            let cancellation = reader.cancellation_token();
+            download = DownloadGuard(Some(Box::new(move || cancellation.cancel())));
+            Box::new(decode(reader).await?)
+        }
+        StreamSource::Dash(manifest) => {
+            let source = crate::dash::source(manifest).await?;
+            seeker = Some(source.seek_handle());
+            Box::new(source)
+        }
+    };
+    let (decoder, seeker) = prepare_start(decoder, seeker, position).await?;
+    let (decoder, lease) = crate::audio_buffer::Reusable::new(decoder);
+    Ok((
+        Loaded {
+            generation: id,
+            decoder,
+            quality,
+            flac,
+            seeker,
+            _download: download,
+        },
+        lease,
+    ))
 }
 
 async fn prepare_start(
@@ -472,6 +857,10 @@ pub fn audio_test() -> Result<()> {
     println!("Audio device opened and rendered 150 ms of test audio.");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "audio_next_tests.rs"]
+mod next_tests;
 
 #[cfg(test)]
 mod resume_tests {

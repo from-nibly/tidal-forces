@@ -2,10 +2,52 @@ use super::super::tests::{fixture, track};
 use super::*;
 
 #[test]
+fn claimed_boundary_invalidates_drag_before_destination_indices_are_used() {
+    let (_, mut app, _, mut requests) = fixture();
+    app.queue_mut()
+        .start(vec![track(1)], 0, "Fixture".into(), None)
+        .unwrap();
+    for id in [9, 10, 11] {
+        app.queue_mut().add(track(id), false).unwrap();
+    }
+    let ids: Vec<_> = app
+        .queue
+        .manual()
+        .iter()
+        .map(|entry| entry.occurrence)
+        .collect();
+    let drag = QueueDrag {
+        user: 7,
+        context: app.context_generation,
+        revision: app.queue.revision(),
+        occurrence: ids[2],
+    };
+    app.backend.player.seed_buffered_fixture();
+    app.paused = false;
+    app.actual_quality = "Fixture FLAC".into();
+    app.position = 151;
+    app.prefetch_audio();
+    let Request::PrepareNext(request) = requests.try_recv().unwrap() else {
+        panic!("Expected preparation");
+    };
+    app.backend.player.fixture_next(&request, true);
+    assert!(!app.drop_manual(&drag, ids[1], false));
+    assert_eq!(app.queue.current().unwrap().id, 9);
+    assert_eq!(
+        app.queue
+            .manual()
+            .iter()
+            .map(|entry| entry.track.id)
+            .collect::<Vec<_>>(),
+        [10, 11]
+    );
+}
+
+#[test]
 fn manual_drop_uses_occurrences_and_rejects_stale_or_cross_account_payloads() {
     let (_ctx, mut app, _events, _requests) = fixture();
     for _ in 0..3 {
-        app.queue.add(track(9), false).unwrap();
+        app.queue_mut().add(track(9), false).unwrap();
     }
     let ids: Vec<_> = app
         .queue
@@ -74,7 +116,7 @@ fn dragging_the_handle_reorders_without_clicking_play() {
         let (ctx, mut app, _events, mut requests) = fixture();
         app.queue_open = true;
         for _ in 0..3 {
-            app.queue.add(track(9), false).unwrap();
+            app.queue_mut().add(track(9), false).unwrap();
         }
         let first = app.queue.manual()[0].occurrence;
         draw(&ctx, &mut app, size, full_app, vec![]);

@@ -52,6 +52,14 @@ impl Feedback {
             && !self.0.done.load(Ordering::Acquire)
             && !self.0.cancelled.load(Ordering::Acquire)
     }
+    pub fn finished(&self) -> bool {
+        self.0.done.load(Ordering::Acquire)
+    }
+    pub fn ready(&self) -> bool {
+        self.0.read.load(Ordering::Acquire) != self.0.write.load(Ordering::Acquire)
+            && !self.0.cancelled.load(Ordering::Acquire)
+            && !self.failed()
+    }
     pub fn failed(&self) -> bool {
         self.0.failed.load(Ordering::Acquire)
     }
@@ -250,7 +258,8 @@ impl Iterator for PcmSource {
 }
 impl Source for PcmSource {
     fn current_span_len(&self) -> Option<usize> {
-        Some(usize::from(self.channels) - self.channel)
+        // The format is fixed. Per-frame spans would restart Rodio's resampler.
+        None
     }
     fn channels(&self) -> u16 {
         self.channels

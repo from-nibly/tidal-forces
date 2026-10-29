@@ -168,6 +168,7 @@ pub enum Request {
         quality: String,
         position: u64,
     },
+    PrepareNext(crate::audio::NextRequest),
     SeekBuffered {
         generation: u64,
         position: u64,
@@ -313,6 +314,7 @@ pub enum Event {
         generation: u64,
         tracks: Vec<Track>,
     },
+    Transition(u64),
     Playing {
         generation: u64,
         quality: String,
@@ -556,6 +558,21 @@ impl Backend {
                                     Request::ContextPage { user, generation, source } => {
                                         let result = api.context_page(user, &source).await.map_err(|e| e.to_string());
                                         events.send(Event::ContextPage { generation, result });
+                                    }
+                                    Request::PrepareNext(request) => {
+                                        if !audio.is_preparing(&request) || api.session.as_ref().map(|s| s.user_id) != Some(request.key.user) {
+                                            audio.fail_next(&request);
+                                            return Ok(());
+                                        }
+                                        match api.stream(request.key.track, &request.key.quality).await {
+                                            Ok(stream) => {
+                                                let audio = audio.clone();
+                                                tokio::spawn(async move {
+                                                    if audio.prepare_next(request.clone(), stream).await.is_err() { audio.fail_next(&request); }
+                                                });
+                                            }
+                                            Err(_) => audio.fail_next(&request),
+                                        }
                                     }
                                     Request::SeekBuffered { generation, position } => {
                                         let audio = audio.clone();

@@ -216,6 +216,18 @@ additions follow view order. Duplicate occurrences and playlist removal position
 stay distinct. **Reset view** restores normal collection playback and pagination.
 Changing the view never rewrites your playlist or changes the currently playing queue.
 
+## Prepared-next playback (v0.29.0)
+
+One known queued successor can be prepared near the end of the current song.
+Compatible FLAC sources with the same decoded rate/channels join without restarting
+the output sink. Queue/account/quality guards, occurrence-aware changes, per-track
+listening accounting and buffered seeking remain intact. AAC, format changes and
+context-repeat wraps keep ordinary transitions; this is not a universal gapless or
+bit-perfect-output claim. No radio/autoplay or crossfade is added.
+
+This release also fixes v0.28's resampling-span error when source and
+output rates differ. Approved after native preview review.
+
 ## Audio handoff and current-song buffering (v0.28.0)
 
 - Decoders and stream reads run on bounded background workers, not on the audio

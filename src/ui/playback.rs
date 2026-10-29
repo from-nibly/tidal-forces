@@ -55,6 +55,7 @@ impl App {
     }
 
     pub(super) fn play_at(&mut self, position: u64) {
+        self.sync_next(true);
         let Some(track) = self.queue.current() else {
             return;
         };
@@ -148,13 +149,13 @@ impl App {
                     Some(index)
                 };
                 if let Some(index) = index {
-                    self.queue.start(tracks, index, title, continuation)
+                    self.queue_mut().start(tracks, index, title, continuation)
                 } else {
                     Err(anyhow::anyhow!("That song is not in the current view"))
                 }
             }
             PageStart::Collection { shuffle } => {
-                self.queue
+                self.queue_mut()
                     .start_collection(tracks, title, continuation, shuffle)
             }
         };
@@ -168,7 +169,7 @@ impl App {
     }
 
     pub(super) fn queue_track(&mut self, track: Track, next: bool) {
-        match self.queue.add(track, next) {
+        match self.queue_mut().add(track, next) {
             Ok(()) => {
                 self.queue_open = true;
                 if self.waiting_context && !self.paused {
@@ -180,8 +181,10 @@ impl App {
     }
 
     pub(super) fn toggle(&mut self) {
+        self.sync_next(true);
+        self.next_attempt = None;
         if self.queue.current().is_none() {
-            if self.queue.advance(false) {
+            if self.queue_mut().advance(false) {
                 self.play_current();
             } else if !self.tracks.is_empty() {
                 self.play_collection(false);
@@ -215,7 +218,7 @@ impl App {
         self.advance(false);
     }
     pub(super) fn advance(&mut self, natural: bool) {
-        if self.queue.advance(natural) {
+        if self.queue_mut().advance(natural) {
             self.play_current();
         } else if self.queue.continuation().is_some() {
             self.play_generation = self.backend.player.reserve();
@@ -239,13 +242,14 @@ impl App {
         }
     }
     pub(super) fn previous(&mut self) {
+        self.sync_next(true);
         if self.position > 3 {
             if self.buffering {
                 self.play_current();
             } else {
                 self.seek(0);
             }
-        } else if self.queue.previous() {
+        } else if self.queue_mut().previous() {
             self.play_current();
         }
     }
@@ -266,11 +270,11 @@ impl App {
     }
     pub(super) fn clear_source(&mut self) {
         self.cancel_context();
-        self.queue.clear_context();
+        self.queue_mut().clear_context();
     }
     pub(super) fn stop_and_clear(&mut self) {
         self.cancel_context();
-        self.queue.clear();
+        self.queue_mut().clear();
         self.play_generation = self.backend.player.reserve();
         self.paused = true;
         self.buffering = false;
@@ -284,7 +288,9 @@ impl App {
             || self.context_error.is_some()
             || (!self.context_retry
                 && !self.waiting_context
-                && (self.paused || self.audio_buffering()))
+                && (self.paused
+                    || self.audio_buffering()
+                    || self.backend.player.has_prepared_next()))
         {
             return;
         }
@@ -334,6 +340,7 @@ impl App {
         }
     }
     pub(super) fn checkpoint(&mut self, force: bool) {
+        self.sync_next(false);
         let (Some(user), Some(store)) = (self.account, &self.state_store) else {
             return;
         };
@@ -423,7 +430,7 @@ impl App {
                     match result {
                         Ok(Some(state)) if unchanged && !skip_restore => {
                             self.cancel_context();
-                            self.queue = state.queue;
+                            self.replace_queue(state.queue);
                             self.position = state.progress.position;
                             self.paused = true;
                             self.buffering = false;

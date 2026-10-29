@@ -3937,7 +3937,7 @@ dependencies = [
 
 [[package]]
 name = "tidal-forces"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

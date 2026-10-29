@@ -111,10 +111,10 @@ fn load_all_and_stop_buttons_only_schedule_requested_pages() {
 fn full_playlist_reads_use_raw_offsets_and_keep_playback_selection_and_revision() {
     let (_ctx, mut app, events, mut requests) = fixture();
     prepare(&mut app, 305);
-    app.queue
+    app.queue_mut()
         .start(vec![track(9)], 0, "Current source".into(), None)
         .unwrap();
-    app.queue.add(track(8), false).unwrap();
+    app.queue_mut().add(track(8), false).unwrap();
     app.paused = false;
     let revision = app.queue.revision();
     app.track_selection

@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn streaming_underflow_is_not_a_pending_play_request_and_pause_still_works() {
     let (_, mut app, events, mut requests) = tests::fixture();
-    app.queue
+    app.queue_mut()
         .start(vec![tests::track(1)], 0, "Fixture".into(), None)
         .unwrap();
     app.paused = false;
@@ -36,7 +36,7 @@ fn streaming_underflow_is_not_a_pending_play_request_and_pause_still_works() {
 fn seek_prepares_new_stream_without_changing_queue_or_pause_intent() {
     for paused in [true, false] {
         let (_, mut app, events, mut requests) = tests::fixture();
-        app.queue
+        app.queue_mut()
             .start(
                 vec![tests::track(1), tests::track(1)],
                 1,
@@ -82,7 +82,7 @@ fn seek_prepares_new_stream_without_changing_queue_or_pause_intent() {
 fn buffered_seek_keeps_occurrence_pause_and_idle_refresh_guards() {
     for paused in [true, false] {
         let (_, mut app, events, mut requests) = tests::fixture();
-        app.queue
+        app.queue_mut()
             .start(
                 vec![tests::track(1), tests::track(1)],
                 1,
@@ -132,7 +132,7 @@ fn buffered_seek_keeps_occurrence_pause_and_idle_refresh_guards() {
 fn stopped_or_failed_stream_cannot_leave_a_buffering_indicator() {
     let (_, mut app, events, _) = tests::fixture();
     app.actual_quality = "FLAC".into();
-    app.queue
+    app.queue_mut()
         .start(vec![tests::track(1)], 0, "Fixture".into(), None)
         .unwrap();
     events

@@ -60,11 +60,11 @@ pub(super) fn frame(
 fn native_pages_render_at_minimum_size_and_high_zoom_without_unbounded_track_widgets() {
     let (ctx, mut app, _events, _requests) = fixture();
     app.tracks = (1..=10000).map(track).collect();
-    app.queue
+    app.queue_mut()
         .start((1..=10000).map(track).collect(), 0, "Fixture".into(), None)
         .unwrap();
     for id in 1..=5 {
-        app.queue.add(track(id), false).unwrap();
+        app.queue_mut().add(track(id), false).unwrap();
     }
     for size in [
         vec2(1920., 1080.),
@@ -259,9 +259,9 @@ fn collection_header_actions_start_once_and_preserve_manual_queue_and_raw_contin
             next_offset: 100,
             more: true,
         });
-        app.queue.add(track(9), false).unwrap();
+        app.queue_mut().add(track(9), false).unwrap();
         if !shuffle {
-            app.queue.toggle_shuffle();
+            app.queue_mut().toggle_shuffle();
         }
         let manual = app.queue.manual()[0].occurrence;
         let draw = |app: &mut App, events| {

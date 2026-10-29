@@ -448,7 +448,7 @@ fn paste_ignores_other_dialogs_loading_and_missing_revisions_and_bounds_the_dest
 #[test]
 fn export_requires_confirmation_and_sends_bounded_snapshot_batches_beyond_hundred() {
     let (_ctx, mut app, _events, mut requests) = fixture();
-    app.queue
+    app.queue_mut()
         .start((1..=205).map(track).collect(), 0, "Test".into(), None)
         .unwrap();
     app.open_queue_export();
@@ -466,7 +466,7 @@ fn export_requires_confirmation_and_sends_bounded_snapshot_batches_beyond_hundre
     while let Ok(request) = requests.try_recv() {
         assert!(matches!(request, Request::Folder { .. }));
     }
-    app.queue.clear(); // The confirmed snapshot, not the subsequently edited queue, is exported.
+    app.queue_mut().clear(); // The confirmed snapshot, not the subsequently edited queue, is exported.
     for offset in [0, 100, 200] {
         app.export_tick();
         app.export_tick();
@@ -496,7 +496,7 @@ fn export_requires_confirmation_and_sends_bounded_snapshot_batches_beyond_hundre
 #[test]
 fn cancelled_failed_or_stale_exports_cannot_send_more_batches_or_change_new_account() {
     let (_ctx, mut app, _events, mut requests) = fixture();
-    app.queue.add(track(9), false).unwrap();
+    app.queue_mut().add(track(9), false).unwrap();
     app.open_queue_export();
     app.export.transfer.as_mut().unwrap().started = true;
     app.export_tick();
@@ -523,7 +523,7 @@ fn cancelled_failed_or_stale_exports_cannot_send_more_batches_or_change_new_acco
 #[test]
 fn failed_batch_has_no_automatic_retry_and_retains_destination_for_inspection() {
     let (_ctx, mut app, _events, mut requests) = fixture();
-    app.queue.add(track(9), false).unwrap();
+    app.queue_mut().add(track(9), false).unwrap();
     app.open_queue_export();
     let transfer = app.export.transfer.as_mut().unwrap();
     transfer.started = true;
@@ -544,7 +544,7 @@ fn failed_batch_has_no_automatic_retry_and_retains_destination_for_inspection() 
 #[test]
 fn export_confirmation_fits_minimum_and_high_zoom_viewports_without_sending_writes() {
     let (ctx, mut app, _events, mut requests) = fixture();
-    app.queue.add(track(9), false).unwrap();
+    app.queue_mut().add(track(9), false).unwrap();
     app.open_queue_export();
     for size in [vec2(1240., 820.), vec2(1000., 660.), vec2(666., 440.)] {
         let (output, bounds) = super::super::tests::frame(&ctx, &mut app, size);
@@ -557,7 +557,7 @@ fn export_confirmation_fits_minimum_and_high_zoom_viewports_without_sending_writ
 #[test]
 fn snapshot_preserves_duplicates_and_refuses_unloaded_context_or_missing_worker() {
     let (_ctx, mut app, _events, requests) = fixture();
-    app.queue
+    app.queue_mut()
         .start(
             vec![track(9), track(10)],
             0,
@@ -567,10 +567,10 @@ fn snapshot_preserves_duplicates_and_refuses_unloaded_context_or_missing_worker(
         .unwrap();
     app.open_queue_export();
     assert!(app.export.transfer.is_none());
-    app.queue
+    app.queue_mut()
         .start(vec![track(9), track(10)], 0, "Test".into(), None)
         .unwrap();
-    app.queue.add(track(9), false).unwrap();
+    app.queue_mut().add(track(9), false).unwrap();
     app.open_queue_export();
     assert_eq!(app.export.transfer.as_ref().unwrap().ids, [9, 9, 10]);
     drop(requests);

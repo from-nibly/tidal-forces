@@ -1,6 +1,6 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.28.0 approved; publication and scoped installation in progress.**
+**Status: v0.28.0 published and installed; P4 prepared-next work in development.**
 Published/installed baseline: v0.27.0 (`0c15ddef8c21`); published managed pin `e48c3a0`.
 Scoped installation used deployed-source commit `dcde66c` on the exactly reproduced
 baseline, preserving protected services and the separately approved input setting
@@ -35,7 +35,28 @@ Use a development branch and `-dev` version for the next iteration. Verify the
 GitHub artifact and checksum before updating the managed pin; never overwrite it
 with `--install`. Preserve a running preview until a safe replacement is approved.
 
-## Approved P4a slice (v0.28.0)
+## Approved P4b slice (v0.29.0)
+
+Prepare one known successor near the final 30 seconds. Compatible FLAC sources
+with equal decoded rate/channels join through one continuous PCM source and sink.
+An atomic claim/cancel boundary is reconciled before queue mutations or transport
+changes; account, occurrence, revision, quality and unique generation guards remain
+in force. Old-track listening totals are finalized before the current occurrence
+changes, and the promoted song retains its decoder/buffer for local seeks.
+
+The current-song 256 MiB per-stream cap and bounded workers/preparations remain;
+only one successor is prepared. AAC priming/padding, mixed formats and unpredictable
+context-repeat wraps retain ordinary transitions. No crossfade, DSP, automatic
+unavailable-track skipping, device recovery or P5 radio is added.
+
+This slice also corrects v0.28's one-frame PCM spans, which restarted Rodio's rate
+converter when source/output rates differed. Synthetic output now matches a
+constant-format reference. Exact joins, cancel/claim races, buffering accounting,
+queue/history/seek guards and offline-fixture FLAC promotion are covered by tests.
+Native preview review is approved; publication and scoped installation are authorized.
+Preserve the running preview during installation.
+
+## Released P4a slice (v0.28.0)
 
 Before preparing the next track, remove blocking decoder/stream reads from the
 output callback. The current slice provides a single-producer/single-consumer PCM
@@ -57,8 +78,8 @@ Tests cover stalled producers, frame alignment, backpressure, cancellation,
 file caps/privacy, reused/stale seek scopes, pause, and unchanged FLAC/AAC samples.
 Synthetic FLAC/AAC-LC/HE-AAC/HE-AAC v2 playback and seeks also run after the fixture
 HTTP server shuts down, proving buffered data is sufficient without reauthorization.
-This does not yet
-implement prepared-next/continuous track handoff, sample-perfect gapless playback,
+That release did not include
+prepared-next/continuous track handoff, sample-perfect gapless playback,
 output-device recovery, DSP or radio continuation. No live audio/device tests have
 been authorized for this slice.
 

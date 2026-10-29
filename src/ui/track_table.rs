@@ -96,7 +96,7 @@ impl App {
                         .join("\n"),
                 );
             } else {
-                self.queue
+                self.queue_mut()
                     .add_many(tracks, matches!(action, SelectionAction::Next))?;
                 self.queue_open = true;
                 if self.waiting_context && !self.paused {

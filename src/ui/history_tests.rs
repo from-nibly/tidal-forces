@@ -6,12 +6,39 @@ fn ready(app: &mut App, ctx: &egui::Context) -> tempfile::TempDir {
     app.state_store = Some(StateStore::new(root.path().into(), ctx.clone()).unwrap());
     app.listening.state = Some(History::new(7));
     app.set_history_enabled(true);
-    app.queue
+    app.queue_mut()
         .start(vec![track(9)], 0, "Test".into(), None)
         .unwrap();
     app.play_generation = 4;
     root
 }
+#[test]
+fn prepared_boundary_credits_old_track_before_replacing_current_occurrence() {
+    let (_, mut app, _, mut requests) = fixture();
+    app.listening.state = Some(History::new(7));
+    app.set_history_enabled(true);
+    app.queue_mut()
+        .start(vec![track(1), track(2)], 0, "Fixture".into(), None)
+        .unwrap();
+    app.backend.player.seed_buffered_fixture();
+    app.paused = false;
+    app.actual_quality = "Fixture FLAC".into();
+    app.position = 151;
+    app.observe_listening(0, Duration::ZERO, Duration::ZERO);
+    app.prefetch_audio();
+    let Request::PrepareNext(request) = requests.try_recv().unwrap() else {
+        panic!("Expected preparation");
+    };
+    app.backend.player.fixture_next(&request, true);
+    app.queue_mut().add(track(9), true).unwrap();
+    let history = app.listening.state.as_ref().unwrap();
+    assert_eq!(history.entries.len(), 1);
+    assert_eq!(history.entries[0].track.id, 1);
+    assert_eq!(app.queue.current().unwrap().id, 2);
+    app.observe_listening(0, Duration::from_secs(180), Duration::from_secs(180));
+    assert_eq!(app.listening.state.as_ref().unwrap().entries.len(), 1);
+}
+
 #[test]
 fn restore_position_and_stale_events_cannot_fabricate_history_or_cross_accounts() {
     let (ctx, mut app, events, _requests) = fixture();

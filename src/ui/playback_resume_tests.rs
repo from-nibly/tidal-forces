@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 #[test]
 fn long_pause_refreshes_same_occurrence_at_position_and_ignores_old_end() {
     let (_, mut app, events, mut requests) = tests::fixture();
-    app.queue
+    app.queue_mut()
         .start(
             vec![tests::track(1), tests::track(1), tests::track(2)],
             1,
@@ -56,7 +56,7 @@ fn long_pause_refreshes_same_occurrence_at_position_and_ignores_old_end() {
 #[test]
 fn short_pause_keeps_existing_stream() {
     let (_, mut app, _, mut requests) = tests::fixture();
-    app.queue
+    app.queue_mut()
         .start(vec![tests::track(1)], 0, "Fixture".into(), None)
         .unwrap();
     app.paused = false;
@@ -73,7 +73,7 @@ fn short_pause_keeps_existing_stream() {
 #[test]
 fn premature_end_retries_at_position_without_advancing_or_automatic_retry() {
     let (_, mut app, events, mut requests) = tests::fixture();
-    app.queue
+    app.queue_mut()
         .start(
             vec![tests::track(1), tests::track(2)],
             0,
@@ -114,7 +114,7 @@ fn premature_end_retries_at_position_without_advancing_or_automatic_retry() {
 #[test]
 fn natural_end_still_advances_the_queue() {
     let (_, mut app, events, mut requests) = tests::fixture();
-    app.queue
+    app.queue_mut()
         .start(
             vec![tests::track(1), tests::track(2)],
             0,

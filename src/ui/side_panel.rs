@@ -65,6 +65,7 @@ impl App {
                 .any(|entry| entry.occurrence == drag.occurrence)
     }
     fn drop_manual(&mut self, drag: &QueueDrag, target: u64, after: bool) -> bool {
+        self.sync_next(true);
         if !self.valid_queue_drag(drag) {
             return false;
         }
@@ -85,7 +86,7 @@ impl App {
             return false;
         };
         let insertion = to + usize::from(after);
-        self.queue.move_manual(
+        self.queue_mut().move_manual(
             drag.occurrence,
             insertion.saturating_sub(usize::from(from < insertion)),
         )
@@ -118,6 +119,8 @@ impl App {
     }
 
     fn queue_contents(&mut self, ui: &mut egui::Ui) {
+        self.sync_next(false);
+        let revision = self.queue.revision();
         let mut action = None;
         let mut track_action = None;
         ui.horizontal(|ui| {
@@ -350,18 +353,21 @@ impl App {
                 }
             });
         match action {
-            Some(Action::Manual(id)) if self.queue.jump_manual(id) => self.play_current(),
-            Some(Action::Context(id)) if self.queue.jump_context(id) => self.play_current(),
+            Some(Action::Manual(id)) if self.queue_mut().jump_manual(id) => self.play_current(),
+            Some(Action::Context(id)) if self.queue_mut().jump_context(id) => self.play_current(),
             Some(Action::Move(id, index)) => {
-                self.queue.move_manual(id, index);
+                let queue = self.queue_mut();
+                if queue.revision() == revision {
+                    queue.move_manual(id, index);
+                }
             }
             Some(Action::Drop(drag, target, after)) => {
                 self.drop_manual(&drag, target, after);
             }
             Some(Action::Remove(id)) => {
-                self.queue.remove_manual(id);
+                self.queue_mut().remove_manual(id);
             }
-            Some(Action::ClearManual) => self.queue.clear_manual(),
+            Some(Action::ClearManual) => self.queue_mut().clear_manual(),
             Some(Action::ClearSource) => self.clear_source(),
             Some(Action::ClearAll) => self.stop_and_clear(),
             Some(Action::Retry) => self.retry_context(),

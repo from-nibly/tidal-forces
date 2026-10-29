@@ -182,7 +182,7 @@ fn modifier_selection_copies_duplicates_without_playing_and_bulk_queue_keeps_ord
             "https://tidal.com/browse/track/1\nhttps://tidal.com/browse/track/1\nhttps://tidal.com/browse/track/3"
         ]
     );
-    app.queue.add(track(8), false).unwrap();
+    app.queue_mut().add(track(8), false).unwrap();
     app.apply_selection_action(&ctx, SelectionAction::Next);
     assert_eq!(
         app.queue
@@ -405,7 +405,7 @@ fn sorted_keyboard_ranges_copy_and_play_in_visible_order_without_unloaded_tracks
         ["https://tidal.com/browse/track/3\nhttps://tidal.com/browse/track/2"]
     );
     assert!(requests.try_recv().is_err());
-    app.queue.add(track(9), false).unwrap();
+    app.queue_mut().add(track(9), false).unwrap();
     app.play_collection(false);
     assert!(matches!(
         requests.try_recv(),

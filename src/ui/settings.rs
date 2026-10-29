@@ -106,13 +106,19 @@ impl App {
                 } else {
                     ui.label("Compatibility sign-in is AAC-only. Use General to authorize lossless playback.");
                 }
+                let mut quality = self.quality.clone();
                 ui.radio_value(
-                    &mut self.quality,
+                    &mut quality,
                     "LOSSLESS".into(),
                     "Prefer lossless · AAC fallback when unavailable",
                 );
-                ui.radio_value(&mut self.quality, "HIGH".into(), "High · AAC");
-                ui.radio_value(&mut self.quality, "LOW".into(), "Low · AAC");
+                ui.radio_value(&mut quality, "HIGH".into(), "High · AAC");
+                ui.radio_value(&mut quality, "LOW".into(), "Low · AAC");
+                if quality != self.quality {
+                    self.sync_next(true);
+                    self.next_attempt = None;
+                    self.quality = quality;
+                }
                 ui.label(RichText::new("Applies to the next track. The player reports the actual source format, not unverified hi-res or bit-perfect output.").color(MUTED));
                 ui.add_space(20.);
                 surfaces::section_title(ui, "Audio output");

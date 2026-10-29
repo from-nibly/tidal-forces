@@ -5,7 +5,7 @@ fn transport_icons_share_a_vertical_center_at_all_supported_widths() {
     for width in [666., 1000., 1240., 1920.] {
         for paused in [true, false] {
             let (ctx, mut app, _events, _requests) = tests::fixture();
-            app.queue
+            app.queue_mut()
                 .start(vec![tests::track(1)], 0, "Fixture".into(), None)
                 .unwrap();
             app.paused = paused;

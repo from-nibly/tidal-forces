@@ -198,11 +198,13 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             }
         })
         .collect();
-    app.queue
-        .start(app.tracks.clone(), 0, "Night drives".into(), None)
+    let tracks = app.tracks.clone();
+    app.queue_mut()
+        .start(tracks, 0, "Night drives".into(), None)
         .unwrap();
-    for track in app.tracks[1..3].iter().cloned() {
-        app.queue.add(track, false).unwrap();
+    let manual = app.tracks[1..3].to_vec();
+    for track in manual {
+        app.queue_mut().add(track, false).unwrap();
     }
     let mut history = crate::history::History::new(7);
     history.set_enabled(true);

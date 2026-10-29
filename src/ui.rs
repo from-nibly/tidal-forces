@@ -29,6 +29,7 @@ pub(crate) mod navigation;
 mod pcm_tests;
 mod pins;
 mod playback;
+mod playback_next;
 #[cfg(test)]
 mod playback_resume_tests;
 mod playlist_delete;
@@ -143,7 +144,9 @@ pub struct App {
     more: bool,
     error: Option<String>,
     audio_available: bool,
-    queue: Queue,
+    queue: playback_next::PlaybackQueue,
+    next_attempt: Option<crate::audio::NextKey>,
+    next_budget: (u64, u8),
     queue_open: bool,
     context_generation: u64,
     context_loading: bool,
@@ -300,7 +303,9 @@ impl App {
             more: false,
             error: None,
             audio_available: true,
-            queue: Queue::default(),
+            queue: Queue::default().into(),
+            next_attempt: None,
+            next_budget: (0, 0),
             queue_open: false,
             context_generation: 0,
             context_loading: false,
@@ -596,7 +601,7 @@ impl App {
         self.restore_ready = false;
         self.play_generation = self.backend.player.reserve();
         self.generation += 1;
-        self.queue = Queue::default();
+        self.replace_queue(Queue::default());
         self.paused = true;
         self.buffering = false;
         self.loading = false;
@@ -619,6 +624,7 @@ impl App {
     }
 
     fn events(&mut self) {
+        self.sync_next(false);
         while let Ok(event) = self.backend.rx.try_recv() {
             match event {
                 Event::QueuePlaylistCreated {
@@ -666,7 +672,7 @@ impl App {
                 {
                     self.context_loading = false;
                     let result = result.and_then(|page| {
-                        self.queue
+                        self.queue_mut()
                             .append(page.tracks, page.continuation)
                             .map_err(|error| error.to_string())
                     });
@@ -682,7 +688,7 @@ impl App {
                         let paused = self.paused;
                         self.waiting_context = false;
                         self.buffering = false;
-                        if self.queue.advance(false) {
+                        if self.queue_mut().advance(false) {
                             self.position = 0;
                             self.actual_quality.clear();
                             self.ended = false;
@@ -828,6 +834,7 @@ impl App {
                 Event::Session(account) => {
                     let account_changed = self.account != account.as_ref().map(|(user, _)| *user);
                     if account_changed {
+                        self.sync_next(true);
                         self.cancel_folder_edit();
                         self.cancel_delete_playlist();
                         self.cancel_reorder();
@@ -840,7 +847,7 @@ impl App {
                         self.restore_guard = None;
                         self.restore_ready = false;
                         self.play_generation = self.backend.player.reserve();
-                        self.queue = Queue::default();
+                        self.replace_queue(Queue::default());
                         self.paused = true;
                         self.buffering = false;
                         self.actual_quality.clear();
@@ -900,7 +907,7 @@ impl App {
                         self.artists.clear();
                         self.mixes.clear();
                         self.daily = None;
-                        self.queue = Queue::default();
+                        self.replace_queue(Queue::default());
                         self.paused = true;
                         self.buffering = false;
                     }
@@ -1066,6 +1073,9 @@ impl App {
                         self.play_track(0);
                     }
                 }
+                Event::Transition(generation) if self.backend.player.current(generation) => {
+                    self.sync_next(false)
+                }
                 Event::Playing {
                     generation,
                     quality,
@@ -1149,6 +1159,13 @@ impl App {
             .map(|m| m.events.try_iter().collect())
             .unwrap_or_default();
         for event in events {
+            if !matches!(
+                &event,
+                MediaControlEvent::SetVolume(_) | MediaControlEvent::Raise
+            ) {
+                self.sync_next(true);
+                self.next_attempt = None;
+            }
             match event {
                 MediaControlEvent::Toggle => self.toggle(),
                 MediaControlEvent::Play if self.paused => self.toggle(),
@@ -1192,6 +1209,7 @@ impl App {
     }
 
     fn seek(&mut self, seconds: u64) {
+        self.sync_next(true);
         if self.buffering {
             return;
         }
@@ -1662,7 +1680,7 @@ impl App {
                                         )
                                         .clicked()
                                         {
-                                            self.queue.toggle_shuffle();
+                                            self.queue_mut().toggle_shuffle();
                                         }
                                             if icon_button(
                                                 ui,
@@ -1726,7 +1744,8 @@ impl App {
                                                 );
                                             }
                                             if repeat.clicked() {
-                                                self.queue.set_repeat(self.queue.repeat().next());
+                                                let repeat = self.queue.repeat().next();
+                                                self.queue_mut().set_repeat(repeat);
                                             }
                                         },
                                     );
@@ -2947,6 +2966,7 @@ impl eframe::App for App {
         self.reorder_window(ctx);
         self.export_window(ctx);
         self.handle_track_paste(ctx);
+        self.prefetch_audio();
         self.prefetch_context();
         self.export_tick();
         self.playlist_load_tick();
