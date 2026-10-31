@@ -31,6 +31,7 @@ fn stream() -> (Stream, std::thread::JoinHandle<()>) {
             codec: "FLAC".into(),
             sample_rate: Some(44100),
             bit_depth: Some(16),
+            normalization: crate::dsp::Metadata::default(),
         },
         server,
     )
@@ -81,6 +82,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     }
     let (tx, rx) = mpsc::channel();
     let player = Player::new(Events::fixture(tx));
+    player.select_output(crate::output_devices::Target::CompatibilityDefault);
     let id = player.reserve();
     let (source, server) = stream();
     player.load(id, source, 0).await.unwrap();
@@ -287,6 +289,7 @@ async fn cancelled_preparation_cannot_arm_and_aac_is_not_claimed_gapless() {
         codec: "AAC".into(),
         sample_rate: None,
         bit_depth: None,
+        normalization: crate::dsp::Metadata::default(),
     };
     assert!(
         player

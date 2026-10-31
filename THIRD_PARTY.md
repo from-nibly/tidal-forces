@@ -33,6 +33,12 @@ Upstream source and bindings:
 - https://crates.io/api/v1/crates/fdk-aac-sys/0.5.0/download
 - https://github.com/haileys/fdk-aac-rs
 
+Native Linux routing uses libpulse-binding 2.30.1 (MIT OR Apache-2.0), with a
+local cancellation-lifetime fix documented in `vendor/README.md`. Its original
+licenses remain in `vendor/libpulse-binding/`; the MIT notice is embedded in
+`--licenses`. The executable dynamically links the operating system's libpulse
+client library (LGPL-2.1-or-later); no PulseAudio daemon is bundled.
+
 Other project dependencies and pinned versions are recorded in `Cargo.lock`.
 Inter font notices are in `assets/fonts/OFL.txt` and are also shown by
 `--licenses`. Application source remains MIT licensed under `LICENSE`.

@@ -1357,24 +1357,58 @@ impl Api {
     }
 
     pub async fn stream(&mut self, id: u64, quality: &str) -> Result<Stream> {
-        let v = self
+        let path = format!("tracks/{id}/playbackinfopostpaywall");
+        let response = self
             .get(
-                &format!("tracks/{id}/playbackinfopostpaywall"),
+                &path,
                 &[
                     ("playbackmode", "STREAM"),
                     ("audioquality", quality),
                     ("assetpresentation", "FULL"),
                 ],
             )
-            .await?;
+            .await;
+        let v = match response {
+            Ok(value) => value,
+            Err(error) => {
+                if error
+                    .downcast_ref::<RequestNotFound>()
+                    .is_some_and(|e| e.path == path)
+                {
+                    // An asset lookup failure alone is not proof of catalog unavailability.
+                    let catalog = format!("tracks/{id}");
+                    if let Err(check) = self.get(&catalog, &[]).await
+                        && check
+                            .downcast_ref::<RequestNotFound>()
+                            .is_some_and(|e| e.path == catalog)
+                    {
+                        return Err(TrackUnavailable.into());
+                    }
+                }
+                return Err(error);
+            }
+        };
         // TIDAL may return a lower-quality asset when lossless isn't available.
         // Decode that authorized stream and label its actual quality, not the request.
         parse_stream(&v)
     }
 }
 
+#[derive(Debug)]
+pub struct TrackUnavailable;
+impl std::fmt::Display for TrackUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("This track is unavailable for this account.")
+    }
+}
+impl std::error::Error for TrackUnavailable {}
+
 #[path = "folder_api.rs"]
 mod folder_api;
+
+#[cfg(test)]
+#[path = "availability_tests.rs"]
+mod availability_tests;
 
 #[cfg(test)]
 #[path = "context_tests.rs"]
@@ -1432,6 +1466,7 @@ pub struct Stream {
     pub codec: String,
     pub sample_rate: Option<u64>,
     pub bit_depth: Option<u64>,
+    pub normalization: crate::dsp::Metadata,
 }
 impl Stream {
     pub fn label(&self) -> String {
@@ -1456,6 +1491,14 @@ pub fn parse_stream(v: &Value) -> Result<Stream> {
     let quality = v["audioQuality"].as_str().unwrap_or("Unknown").to_owned();
     let sample_rate = v["sampleRate"].as_u64();
     let bit_depth = v["bitDepth"].as_u64();
+    let normalization = crate::dsp::Metadata {
+        track: v["trackReplayGain"]
+            .as_f64()
+            .and_then(|v| crate::dsp::Gain::from_replay_gain_db(v as f32)),
+        album: v["albumReplayGain"]
+            .as_f64()
+            .and_then(|v| crate::dsp::Gain::from_replay_gain_db(v as f32)),
+    };
     if v["manifestMimeType"] == "application/dash+xml" {
         let manifest = crate::dash::parse(std::str::from_utf8(&bytes)?)?;
         let sample_rate = Some(manifest.sample_rate as u64);
@@ -1466,6 +1509,7 @@ pub fn parse_stream(v: &Value) -> Result<Stream> {
             codec,
             sample_rate,
             bit_depth,
+            normalization,
         });
     }
     anyhow::ensure!(
@@ -1488,6 +1532,7 @@ pub fn parse_stream(v: &Value) -> Result<Stream> {
         quality,
         sample_rate,
         bit_depth,
+        normalization,
         codec: manifest["codecs"]
             .as_str()
             .unwrap_or("Unknown")

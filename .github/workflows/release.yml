@@ -26,7 +26,7 @@ jobs:
       - name: Install native build and smoke-test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus
+          sudo apt-get install -y build-essential libasound2-dev libpulse-dev pulseaudio libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -45,6 +45,8 @@ jobs:
         run: dbus-run-session -- env TIDAL_TEST_SECRET_SERVICE=1 cargo test --locked native_secret_service_contract_on_isolated_bus -- --ignored
       - name: Isolated non-audible output recovery
         run: python3 tests/output-recovery.py
+      - name: Isolated native routing and cancellation contract
+        run: python3 tests/output-pulse.py
       - name: Build the single executable
         run: cargo build --locked --release
       - name: Verify release executable

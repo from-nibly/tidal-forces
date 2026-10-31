@@ -176,6 +176,18 @@ pub enum Request {
 }
 
 pub enum Event {
+    OutputsChanged,
+    OutputDetails(String),
+    TrackUnavailable {
+        user: u64,
+        generation: u64,
+        id: u64,
+    },
+    TrackAvailable {
+        user: u64,
+        generation: u64,
+        id: u64,
+    },
     Credentials {
         status: Result<crate::credentials::Status, String>,
         warning: Option<String>,
@@ -596,7 +608,16 @@ impl Backend {
                                     }
                                     Request::Play { generation, id, quality, position } => {
                                         if !audio.current(generation) { return Ok(()); }
-                                        let stream = api.stream(id, &quality).await?;
+                                        let user = api.session.as_ref().map(|s| s.user_id);
+                                        let stream = match api.stream(id, &quality).await {
+                                            Ok(stream) => stream,
+                                            Err(error) if error.downcast_ref::<crate::api::TrackUnavailable>().is_some() => {
+                                                if let Some(user) = user { events.send(Event::TrackUnavailable { user, generation, id }); }
+                                                return Ok(());
+                                            }
+                                            Err(error) => return Err(error),
+                                        };
+                                        if let Some(user) = user { events.send(Event::TrackAvailable { user, generation, id }); }
                                         let audio = audio.clone();
                                         let events = events.clone();
                                         tokio::spawn(async move {

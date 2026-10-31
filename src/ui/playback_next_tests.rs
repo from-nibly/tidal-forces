@@ -256,6 +256,22 @@ fn stale_output_loss_cannot_cancel_a_valid_prepared_successor() {
     assert!(app.backend.player.fixture_claim_next(&request));
 }
 #[test]
+fn stale_unavailability_cannot_cancel_a_valid_prepared_successor() {
+    let (mut app, events, mut requests) = playing();
+    let request = prepare(&mut app, &mut requests, false);
+    events
+        .send(Event::TrackUnavailable {
+            user: 7,
+            generation: 99,
+            id: 1,
+        })
+        .unwrap();
+    app.events();
+    assert!(!app.paused && app.unavailable.is_empty());
+    assert!(app.backend.player.fixture_claim_next(&request));
+}
+
+#[test]
 fn output_loss_after_claim_preserves_the_new_occurrence() {
     let (mut app, events, mut requests) = playing();
     prepare(&mut app, &mut requests, true);

@@ -5,7 +5,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-pub const LOST_MESSAGE: &str = "Output lost or unavailable. Choose your system output, then retry here or use Play in the player bar. No automatic restart.";
+pub const LOST_MESSAGE: &str = "Output lost or changed. Choose an output in Playback settings, then retry here or use Play in the player bar. No automatic restart.";
 
 #[derive(Default)]
 pub struct Recovery {
@@ -30,8 +30,24 @@ impl Recovery {
     }
 }
 
+enum Stream {
+    Compatibility(OutputStream),
+    #[cfg(target_os = "linux")]
+    Native(crate::pulse_output::Driver),
+}
+impl Stream {
+    fn mixer(&self) -> &rodio::mixer::Mixer {
+        match self {
+            Self::Compatibility(stream) => stream.mixer(),
+            #[cfg(target_os = "linux")]
+            Self::Native(stream) => &stream.mixer,
+        }
+    }
+}
 pub struct Output {
-    stream: Option<OutputStream>,
+    stream: Option<Stream>,
+    target: crate::output_devices::Target,
+    envelope: Arc<crate::audio_envelope::Control>,
     pub sink: Sink,
     failed: Arc<AtomicBool>,
 }
@@ -39,30 +55,125 @@ impl Default for Output {
     fn default() -> Self {
         Self {
             stream: None,
+            target: crate::output_devices::Target::default(),
+            envelope: Arc::new(crate::audio_envelope::Control::default()),
             sink: Sink::new().0,
             failed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 impl Output {
-    pub fn reset(&mut self, volume: f32) -> Result<(), rodio::StreamError> {
+    pub fn select(&mut self, target: crate::output_devices::Target) {
+        if self.target != target {
+            self.target = target;
+            if self.stream.is_some() {
+                self.failed.store(true, Ordering::Release);
+            }
+        }
+    }
+    pub fn description(&self) -> String {
+        match &self.stream {
+            Some(Stream::Compatibility(stream)) => format!(
+                "Compatibility output · {} Hz · {} channels · {:?}. Physical route protection unavailable.",
+                stream.config().sample_rate(),
+                stream.config().channel_count(),
+                stream.config().sample_format()
+            ),
+            #[cfg(target_os = "linux")]
+            Some(Stream::Native(stream)) => format!(
+                "{} · 48 kHz / 32-bit float / stereo engine · sink lock requested · {}. DAC format and zero-tail unplug behavior are not verified.",
+                stream.label,
+                if stream.port_observed {
+                    "physical port monitored"
+                } else {
+                    "physical port not exposed"
+                }
+            ),
+            None => "Output closed · choose an output, then use Play to open it.".into(),
+        }
+    }
+    pub fn pause(&self, paused: bool) {
+        self.envelope.pause(paused);
+        if !paused {
+            self.sink.play();
+            #[cfg(target_os = "linux")]
+            if let Some(Stream::Native(stream)) = &self.stream {
+                stream.pause(false);
+            }
+        }
+    }
+    pub fn sync_pause(&self) {
+        if self.envelope.stopped() {
+            self.sink.pause();
+            #[cfg(target_os = "linux")]
+            if let Some(Stream::Native(stream)) = &self.stream {
+                stream.pause(true);
+            }
+        }
+    }
+    pub fn stop(&self) {
+        self.envelope.pause(true);
+        self.sink.stop();
+        #[cfg(target_os = "linux")]
+        if let Some(Stream::Native(stream)) = &self.stream {
+            stream.pause(true);
+        }
+    }
+    pub fn volume(&self, volume: f32) {
+        self.envelope.volume(volume);
+    }
+    pub fn reset(&mut self, volume: f32) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.target != crate::output_devices::Target::RequireSelection,
+            "Select an output in Playback settings before retrying."
+        );
+        #[cfg(not(target_os = "linux"))]
+        anyhow::ensure!(
+            !matches!(self.target, crate::output_devices::Target::Pulse(_, _)),
+            "The saved native output is unavailable on this platform. Select an output explicitly."
+        );
         if self.stream.is_none() {
             let failed = Arc::new(AtomicBool::new(false));
-            let signal = failed.clone();
-            // Unlike open_default_stream, this never searches other devices.
-            let mut stream = OutputStreamBuilder::from_default_device()?
-                .with_error_callback(move |_| {
-                    signal.store(true, Ordering::Release);
-                })
-                .open_stream()?;
-            stream.log_on_drop(false);
+            #[cfg(target_os = "linux")]
+            let native = self.target != crate::output_devices::Target::CompatibilityDefault;
+            #[cfg(not(target_os = "linux"))]
+            let native = false;
+            let stream;
+            if native {
+                #[cfg(target_os = "linux")]
+                {
+                    stream = Stream::Native(crate::pulse_output::Driver::open(
+                        &self.target,
+                        failed.clone(),
+                    )?);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    anyhow::bail!("Native routing is unavailable on this platform");
+                }
+            } else {
+                let signal = failed.clone();
+                // Compatibility is explicitly selected; never search alternate devices.
+                let mut output = OutputStreamBuilder::from_default_device()?
+                    .with_error_callback(move |_| {
+                        signal.store(true, Ordering::Release);
+                    })
+                    .open_stream()?;
+                output.log_on_drop(false);
+                stream = Stream::Compatibility(output);
+            }
             self.failed = failed;
             self.stream = Some(stream);
         }
         self.sink.stop();
         self.sink = Sink::connect_new(self.stream.as_ref().unwrap().mixer());
-        self.sink.set_volume(volume);
-        self.sink.pause();
+        self.envelope = Arc::new(crate::audio_envelope::Control::default());
+        self.envelope.volume(volume);
+        self.sync_pause();
+        #[cfg(target_os = "linux")]
+        if let Some(Stream::Native(stream)) = &self.stream {
+            stream.reset();
+        }
         Ok(())
     }
     #[cfg(test)]
@@ -79,7 +190,7 @@ impl Output {
     }
     pub fn append(&self, source: impl Source<Item = f32> + Send + 'static) {
         self.sink.append(Gate {
-            source,
+            source: crate::audio_envelope::Envelope::new(source, self.envelope.clone()),
             failed: self.failed.clone(),
             channel: 0,
         });

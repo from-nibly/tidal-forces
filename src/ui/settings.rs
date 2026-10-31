@@ -13,23 +13,45 @@ pub(super) enum SettingsSection {
 
 impl App {
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
-        surfaces::page_title(ui, "Settings");
-        ui.label(RichText::new("One place for your listening preferences.").color(MUTED));
-        ui.add_space(16.);
-        ui.horizontal_wrapped(|ui| {
-            for (section, name) in [
-                (SettingsSection::General, "General"),
-                (SettingsSection::Appearance, "Appearance"),
-                (SettingsSection::Playback, "Playback"),
-                (SettingsSection::Privacy, "Library & Privacy"),
-                (SettingsSection::Shortcuts, "Shortcuts"),
-                (SettingsSection::About, "About"),
-            ] {
-                ui.selectable_value(&mut self.settings_section, section, name);
-            }
-        });
+        let compact = ui.available_height() < 400.;
+        let sections = [
+            (SettingsSection::General, "General"),
+            (SettingsSection::Appearance, "Appearance"),
+            (SettingsSection::Playback, "Playback"),
+            (SettingsSection::Privacy, "Library & Privacy"),
+            (SettingsSection::Shortcuts, "Shortcuts"),
+            (SettingsSection::About, "About"),
+        ];
+        if compact {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Settings").size(24.).strong());
+                let label = sections
+                    .iter()
+                    .find_map(|(section, name)| {
+                        (*section == self.settings_section).then_some(*name)
+                    })
+                    .unwrap_or("Settings");
+                egui::ComboBox::from_id_salt("settings_section")
+                    .selected_text(label)
+                    .show_ui(ui, |ui| {
+                        for (section, name) in sections {
+                            ui.selectable_value(&mut self.settings_section, section, name);
+                        }
+                    });
+            });
+        } else {
+            surfaces::page_title(ui, "Settings");
+            ui.label(RichText::new("One place for your listening preferences.").color(MUTED));
+            ui.add_space(16.);
+            ui.horizontal_wrapped(|ui| {
+                for (section, name) in sections {
+                    ui.selectable_value(&mut self.settings_section, section, name);
+                }
+            });
+        }
         ui.separator();
-        ui.add_space(16.);
+        ui.add_space(if compact { 8. } else { 16. });
+        egui::ScrollArea::vertical().id_salt("settings_content").auto_shrink([false, false]).show(ui, |ui| {
         let width = ui.available_width().min(880.);
         egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(12).inner_margin(20).show(ui, |ui| {
         ui.set_width((width - 42.).max(0.));
@@ -100,6 +122,10 @@ impl App {
                 ui.label(RichText::new("At narrow sizes the sidebar collapses to icons and the queue opens in a floating panel.").color(MUTED));
             }
             SettingsSection::Playback => {
+                surfaces::section_title(ui, "Audio output");
+                self.output_controls(ui);
+                ui.label(RichText::new("Google Cast and TIDAL Connect are separate integrations. Neither is enabled in this release.").color(MUTED));
+                ui.add_space(20.);
                 surfaces::section_title(ui, "Listening quality");
                 if self.auth_pkce {
                     ui.colored_label(ACCENT, "Lossless-capable sign-in connected");
@@ -121,9 +147,7 @@ impl App {
                 }
                 ui.label(RichText::new("Applies to the next track. The player reports the actual source format, not unverified hi-res or bit-perfect output.").color(MUTED));
                 ui.add_space(20.);
-                surfaces::section_title(ui, "Audio output");
-                ui.label("This computer · system default audio output");
-                ui.label(RichText::new("Google Cast and TIDAL Connect are separate integrations. Neither is enabled in this release.").color(MUTED));
+                self.dsp_controls(ui);
             }
             SettingsSection::Privacy => {
                 self.metadata_cache_controls(ui);
@@ -185,5 +209,124 @@ impl App {
             }
         }
         });
+        });
+    }
+
+    fn output_controls(&mut self, ui: &mut egui::Ui) {
+        let catalog = self.backend.player.outputs.snapshot();
+        if !catalog.requested {
+            self.backend.player.outputs.refresh();
+        }
+        let before = self.appearance.output.clone();
+        let selected = match &before {
+            crate::output_devices::Target::RequireSelection => {
+                "Choose an output before playback".into()
+            }
+            crate::output_devices::Target::SystemDefault => {
+                crate::output_devices::DEFAULT_LABEL.to_owned()
+            }
+            crate::output_devices::Target::CompatibilityDefault => {
+                "Compatibility default · no physical route guard".to_owned()
+            }
+            _ => catalog
+                .devices
+                .iter()
+                .find(|d| d.target == before)
+                .map_or_else(
+                    || "Saved output · unavailable or not refreshed".into(),
+                    |d| d.label.clone(),
+                ),
+        };
+        egui::ComboBox::from_id_salt("audio_output_picker")
+            .selected_text(selected)
+            .width(ui.available_width().min(420.))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.appearance.output,
+                    crate::output_devices::Target::SystemDefault,
+                    crate::output_devices::DEFAULT_LABEL,
+                );
+                for device in &catalog.devices {
+                    ui.selectable_value(
+                        &mut self.appearance.output,
+                        device.target.clone(),
+                        &device.label,
+                    );
+                }
+                ui.selectable_value(
+                    &mut self.appearance.output,
+                    crate::output_devices::Target::CompatibilityDefault,
+                    "Compatibility default · no physical route guard",
+                );
+            });
+        if ui
+            .add_enabled(
+                !self.backend.player.outputs.busy(),
+                egui::Button::new("Refresh outputs"),
+            )
+            .clicked()
+        {
+            self.backend.player.outputs.refresh();
+        }
+        if catalog.unavailable {
+            ui.label(RichText::new("Native output server unavailable. No automatic switch to compatibility output.").color(MUTED));
+        }
+        if self.backend.player.outputs.busy() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        ui.label(RichText::new(&self.output_details).color(MUTED));
+        ui.label(RichText::new("Changing output pauses playback; press Play to continue. A missing saved device never selects another device. Physical route notifications cannot promise zero buffered sound after unplugging.").color(MUTED));
+        if before != self.appearance.output {
+            self.sync_next(true);
+            self.next_attempt = None;
+            if !self.paused {
+                self.toggle();
+            }
+            self.backend
+                .player
+                .select_output(self.appearance.output.clone());
+            self.save_appearance();
+        }
+    }
+
+    fn dsp_controls(&mut self, ui: &mut egui::Ui) {
+        surfaces::section_title(ui, "Local audio processing");
+        let before = self.appearance.dsp;
+        ui.checkbox(&mut self.appearance.dsp.enabled, "Enable processing");
+        ui.label(RichText::new("Off is a sample-preserving bypass. Changes reach playback through the bounded PCM buffer (up to about half a second).").color(MUTED));
+        let metadata = self.backend.player.normalization();
+        ui.add_enabled_ui(self.appearance.dsp.enabled, |ui| {
+            ui.add(egui::Slider::new(&mut self.appearance.dsp.preamp_db, -24. ..=12.).text("Preamp · dB"));
+            ui.add(egui::Slider::new(&mut self.appearance.dsp.balance, -1. ..=1.).text("Balance · left / right"));
+            ui.checkbox(&mut self.appearance.dsp.mono, "Mono · stereo sources");
+            ui.label(RichText::new("Balance/mono apply only to stereo. Positive EQ gains reserve automatic headroom; the processed path limits peaks. No limiter is inserted into bypass.").color(MUTED));
+            ui.add_space(8.);
+            ui.label("Equalizer · dB");
+            ui.label(RichText::new("Stateful EQ or changing normalization gains use ordinary track transitions; no track crossfade.").color(MUTED));
+            for (band, frequency) in self.appearance.dsp.bands.iter_mut().zip(crate::dsp::FREQUENCIES) {
+                ui.add(egui::Slider::new(band, -12. ..=12.).text(format!("{frequency} Hz")));
+            }
+            ui.add_space(8.);
+            ui.label("Normalization · TIDAL SDK attenuation policy");
+            ui.horizontal_wrapped(|ui| {
+                for (mode, name) in [(crate::dsp::Normalization::Off, "Off"), (crate::dsp::Normalization::Track, "Track"), (crate::dsp::Normalization::Album, "Album")] {
+                    ui.selectable_value(&mut self.appearance.dsp.normalization, mode, name);
+                }
+            });
+            if !metadata.available(self.appearance.dsp.normalization) {
+                ui.label(RichText::new("Unavailable for this stream: verified gain metadata was not supplied. No normalization gain is applied.").color(MUTED));
+            }
+        });
+        if ui.button("Reset processing").clicked() {
+            self.appearance.dsp = Default::default();
+        }
+        if before != self.appearance.dsp {
+            self.sync_next(true);
+            self.next_attempt = None;
+            self.backend.player.dsp.set(self.appearance.dsp);
+            self.appearance_save =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(250));
+        }
     }
 }

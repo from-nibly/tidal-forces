@@ -41,7 +41,10 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "cache-settings",
             "cached-playlist",
             "stream-buffering",
-            "output-lost"
+            "output-lost",
+            "audio-settings",
+            "audio-dsp",
+            "unavailable"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -88,13 +91,26 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
 
 struct Capture(App);
 impl eframe::App for Capture {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         // Strip input before egui computes clicks; this is never an interactive fake account.
         input
             .events
             .retain(|event| matches!(event, egui::Event::Screenshot { .. }));
         input.modifiers = egui::Modifiers::NONE;
         input.focused = false;
+        if ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("fixture_audio_dsp_scroll")))
+            .unwrap_or(false)
+        {
+            input
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(350., 300.)));
+            input.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0., -2000.),
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.0.update(ctx, frame);
@@ -305,6 +321,38 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         "privacy" => {
             app.settings_section = SettingsSection::Privacy;
             Page::Settings
+        }
+        "audio-settings" | "audio-dsp" => {
+            app.settings_section = SettingsSection::Playback;
+            let target = crate::output_devices::Target::Pulse(
+                "fixture_headphones".into(),
+                "synthetic-identity".into(),
+            );
+            app.appearance.output = target.clone();
+            app.backend.player.outputs =
+                std::sync::Arc::new(crate::output_devices::Catalog::fixture(vec![
+                    crate::output_devices::Device {
+                        target,
+                        label: "Fixture headphones · Headphones".into(),
+                    },
+                ]));
+            app.output_details = "Synthetic output · 48 kHz / 32-bit float / stereo engine. Hardware behavior is not represented by this fixture.".into();
+            app.appearance.dsp.enabled = true;
+            app.appearance.dsp.preamp_db = -3.;
+            app.appearance.dsp.bands[5] = 2.;
+            app.appearance.dsp.normalization = crate::dsp::Normalization::Track;
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("fixture_audio_dsp_scroll"),
+                    page == "audio-dsp",
+                )
+            });
+            Page::Settings
+        }
+        "unavailable" => {
+            app.unavailable
+                .extend(app.tracks.iter().take(2).map(|track| track.id));
+            Page::Search
         }
         "settings" => {
             app.settings_section = SettingsSection::Appearance;

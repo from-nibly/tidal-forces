@@ -33,10 +33,40 @@ installation or replace its executable manually.
 This is one executable, not Electron, an AppImage, a webview or a wrapper around
 Python/mpv/ffmpeg. It uses standard Linux runtime libraries: glibc, ALSA, your
 graphics driver/OpenGL, and X11 or Wayland. Minimal systems may need
-`libasound2`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, and `libgl1`.
+`libasound2`, `libpulse0`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, and `libgl1`.
 The graphical player requires a desktop session D-Bus for single-instance
 activation and system media controls. The executable is
 not fully static and does not depend on a Nix store closure.
+
+## P4 audio bundle (v0.31)
+
+Playback settings now include a native Linux output picker and optional EQ,
+preamp, stereo balance/mono and track/album normalization. Click the player-bar
+quality label to open them. Processing defaults off; unavailable gain metadata
+is never replaced with an invented value. Small windows use a compact settings
+selector and scrollable controls.
+
+Choose an output once in Playback settings before first playback, including when
+upgrading an older preferences file. Selecting it does not start playback.
+Named native outputs are checked against device/port identity. Outputs without
+stable identity require re-selection on the next launch. Output loss or identity
+changes pause playback and require an explicit retry. Compatibility output is a
+separate explicit choice without physical-route protection. Port notifications
+cannot promise zero buffered sound after unplugging; actual hardware validation
+remains opt-in.
+
+Matching FLAC can retain continuous handoffs with bypass or matching stateless
+processing. Stateful EQ, changing normalization, mixed formats and unverified AAC
+trim data retain ordinary transitions. Source format and the output engine are
+reported separately; neither proves the DAC format or bit-perfect playback.
+
+Confirmed playback-plus-catalog not-found responses dim affected tracks for this
+account. Markers are bounded and expire; five consecutive unavailable attempts
+stop the queue. Other playback errors do not trigger automatic skipping.
+
+Detailed contracts: [processing](docs/audio-processing.md),
+[output validation](docs/output-validation.md),
+[release notes](docs/releases/v0.31.0.md).
 
 ## Lossless sign-in
 
@@ -679,7 +709,7 @@ device credentials can be supplied with `TIDAL_CLIENT_ID` and
 Install stable Rust and native dependencies. On Ubuntu (Bash):
 
 ```bash
-sudo apt-get install build-essential pkg-config libasound2-dev libx11-dev \
+sudo apt-get install build-essential pkg-config libasound2-dev libpulse-dev libx11-dev \
   libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 \
   libwayland-dev libgl1-mesa-dev
 cargo build --locked --release

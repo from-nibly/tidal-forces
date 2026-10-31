@@ -15,6 +15,8 @@ use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
 mod album_load;
+#[cfg(test)]
+mod availability_tests;
 mod browse_cache;
 mod credentials;
 mod export;
@@ -148,6 +150,10 @@ pub struct App {
     next_attempt: Option<crate::audio::NextKey>,
     next_budget: (u64, u8),
     output_fault: Option<u64>,
+    output_details: String,
+    unavailable: std::collections::HashSet<u64>,
+    unavailable_skips: u8,
+    unavailable_expiry: Option<std::time::Instant>,
     queue_open: bool,
     context_generation: u64,
     context_loading: bool,
@@ -175,6 +181,7 @@ pub struct App {
     settings_section: SettingsSection,
     artwork_cache: Option<std::sync::Arc<crate::artwork_cache::ArtworkCache>>,
     appearance: crate::store::Appearance,
+    appearance_save: Option<std::time::Instant>,
     visualizer: Visualizer,
 }
 
@@ -192,7 +199,11 @@ impl App {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let appearance = crate::store::Appearance::load();
         let appearance_error = appearance.as_ref().err().map(|e| e.to_string());
-        let appearance = appearance.unwrap_or_default();
+        // A corrupt preference must not silently replace a pinned output with speakers.
+        let appearance = appearance.unwrap_or_else(|_| crate::store::Appearance {
+            output: crate::output_devices::Target::RequireSelection,
+            ..Default::default()
+        });
         cc.egui_ctx.set_zoom_factor(appearance.zoom);
         let media_result = DesktopControls::new(cc.egui_ctx.clone());
         let media_error = media_result
@@ -230,6 +241,8 @@ impl App {
     }
 
     fn with_backend(backend: Backend, appearance: crate::store::Appearance) -> Self {
+        backend.player.dsp.set(appearance.dsp);
+        backend.player.select_output(appearance.output.clone());
         let visualizer = Visualizer::new(appearance.player_bar_visualizer);
         Self {
             instance: None,
@@ -308,6 +321,10 @@ impl App {
             next_attempt: None,
             next_budget: (0, 0),
             output_fault: None,
+            output_details: "Output opens on Play. DAC format is not verified.".into(),
+            unavailable: Default::default(),
+            unavailable_skips: 0,
+            unavailable_expiry: None,
             queue_open: false,
             context_generation: 0,
             context_loading: false,
@@ -335,6 +352,7 @@ impl App {
             settings_section: SettingsSection::General,
             artwork_cache: None,
             appearance,
+            appearance_save: None,
             visualizer,
         }
     }
@@ -626,6 +644,13 @@ impl App {
     }
 
     fn events(&mut self) {
+        if self
+            .unavailable_expiry
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            self.unavailable.clear();
+            self.unavailable_expiry = None;
+        }
         self.sync_next(false);
         while let Ok(event) = self.backend.rx.try_recv() {
             match event {
@@ -834,6 +859,9 @@ impl App {
                     }
                 }
                 Event::Session(account) => {
+                    self.unavailable.clear();
+                    self.unavailable_expiry = None;
+                    self.unavailable_skips = 0;
                     let account_changed = self.account != account.as_ref().map(|(user, _)| *user);
                     if account_changed {
                         self.sync_next(true);
@@ -1085,6 +1113,10 @@ impl App {
                     self.buffering = false;
                     self.backend.player.pause(self.paused);
                     self.actual_quality = quality;
+                    self.unavailable_skips = 0;
+                    if let Some(track) = self.queue.current() {
+                        self.unavailable.remove(&track.id);
+                    }
                 }
                 Event::StreamBuffering {
                     generation,
@@ -1139,6 +1171,26 @@ impl App {
                     self.loading = false;
                     self.error = Some(message);
                 }
+                Event::TrackUnavailable {
+                    user,
+                    generation,
+                    id,
+                } => self.track_unavailable(user, generation, id),
+                Event::TrackAvailable {
+                    user,
+                    generation,
+                    id,
+                } => {
+                    self.sync_next(false);
+                    if self.account == Some(user)
+                        && generation == self.play_generation
+                        && self.queue.current().map(|t| t.id) == Some(id)
+                    {
+                        self.unavailable.remove(&id);
+                    }
+                }
+                Event::OutputsChanged => {}
+                Event::OutputDetails(details) => self.output_details = details,
                 Event::OutputLost {
                     epoch,
                     generation,
@@ -1576,12 +1628,14 @@ impl App {
     }
 
     fn save_appearance(&mut self) {
+        self.appearance_save = None;
         if let Err(e) = self.appearance.save() {
-            self.error = Some(format!("Could not save appearance settings: {e}"));
+            self.error = Some(format!("Could not save settings: {e}"));
         }
     }
 
     fn player_bar(&mut self, ctx: &egui::Context) {
+        let mut output_settings = false;
         let mut radio = None;
         let mut favorite = None;
         let visible = !ctx.input(|i| i.viewport().minimized.unwrap_or(false));
@@ -1646,7 +1700,7 @@ impl App {
                                         .truncate(),
                                     );
                                     if !self.actual_quality.is_empty() {
-                                        ui.add(
+                                        output_settings |= ui.add(
                                             egui::Label::new(
                                                 RichText::new(
                                                     self.actual_quality.replace('_', " "),
@@ -1654,9 +1708,9 @@ impl App {
                                                 .size(10.)
                                                 .color(ACCENT),
                                             )
-                                            .truncate(),
+                                            .truncate().sense(egui::Sense::click()),
                                         )
-                                        .on_hover_text(&self.actual_quality);
+                                        .on_hover_text(format!("{}\n{}\n{}\nOpen Playback settings", self.actual_quality, self.output_details, if self.appearance.dsp.enabled { "Local processing enabled; no bit-perfect claim." } else { "Local DSP bypass." })).clicked();
                                     }
                                 });
                             } else {
@@ -1886,6 +1940,10 @@ impl App {
                     self.visualizer.mode.label()
                 ));
             });
+        if output_settings {
+            self.settings_section = SettingsSection::Playback;
+            self.navigate(Page::Settings);
+        }
         if let Some(seed) = radio {
             self.apply_track_action(seed);
         }
@@ -2207,6 +2265,12 @@ impl App {
                             && ui.small_button("Retry output").clicked()
                         {
                             self.toggle();
+                        }
+                        if self.output_fault.is_some()
+                            && ui.small_button("Playback settings").clicked()
+                        {
+                            self.settings_section = SettingsSection::Playback;
+                            self.navigate(Page::Settings);
                         }
                         if ui.small_button("Dismiss").clicked() {
                             self.error = None;
@@ -2888,6 +2952,9 @@ impl App {
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.appearance_save.is_some() {
+            self.save_appearance();
+        }
         self.cancel_export(true);
         self.checkpoint_history(true);
         self.checkpoint(true);
@@ -3005,6 +3072,18 @@ impl eframe::App for App {
         self.album_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
+        if let Some(deadline) = self.appearance_save {
+            let now = std::time::Instant::now();
+            if now >= deadline && !ctx.input(|input| input.pointer.any_down()) {
+                self.save_appearance();
+            } else {
+                ctx.request_repaint_after(
+                    deadline
+                        .saturating_duration_since(now)
+                        .max(std::time::Duration::from_millis(50)),
+                );
+            }
+        }
         self.checkpoint_history(false);
         self.checkpoint(false);
         let media_paused = self.paused || self.audio_buffering();

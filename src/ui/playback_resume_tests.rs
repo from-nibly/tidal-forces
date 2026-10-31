@@ -2,6 +2,22 @@ use super::*;
 use std::time::{Duration, SystemTime};
 
 #[test]
+fn an_unselected_output_preserves_the_occurrence_without_authorizing_audio() {
+    let (_, mut app, _, mut requests) = tests::fixture();
+    app.appearance.output = crate::output_devices::Target::RequireSelection;
+    app.queue_mut()
+        .start(vec![tests::track(1)], 0, "Fixture".into(), None)
+        .unwrap();
+    let occurrence = app.queue.current_entry().unwrap().occurrence;
+    app.play_at(42);
+    assert!(app.paused && !app.buffering);
+    assert_eq!(app.position, 42);
+    assert_eq!(app.queue.current_entry().unwrap().occurrence, occurrence);
+    assert_eq!(app.page, Page::Settings);
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn long_pause_refreshes_same_occurrence_at_position_and_ignores_old_end() {
     let (_, mut app, events, mut requests) = tests::fixture();
     app.queue_mut()

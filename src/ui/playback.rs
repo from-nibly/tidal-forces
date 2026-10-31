@@ -61,6 +61,24 @@ impl App {
         };
         let id = track.id;
         let position = position.min(track.duration.saturating_sub(1));
+        if self.appearance.output == crate::output_devices::Target::RequireSelection {
+            self.play_generation = self.backend.player.reserve();
+            self.position = position;
+            self.paused = true;
+            self.paused_since = None;
+            self.buffering = false;
+            self.waiting_context = false;
+            self.ended = false;
+            self.starved_generation = None;
+            self.actual_quality.clear();
+            self.error = Some(
+                "Choose an output in Playback settings, then press Play. No output was opened."
+                    .into(),
+            );
+            self.settings_section = SettingsSection::Playback;
+            self.navigate(Page::Settings);
+            return;
+        }
         self.play_generation = self.backend.player.reserve();
         self.position = position;
         self.paused = false;
@@ -79,10 +97,12 @@ impl App {
     }
 
     pub(super) fn play_track(&mut self, index: usize) {
+        self.unavailable_skips = 0;
         self.start_page(PageStart::Track(index));
     }
 
     pub(super) fn play_collection(&mut self, shuffle: bool) {
+        self.unavailable_skips = 0;
         self.start_page(PageStart::Collection { shuffle });
     }
 
@@ -181,6 +201,7 @@ impl App {
     }
 
     pub(super) fn toggle(&mut self) {
+        self.unavailable_skips = 0;
         if self.paused
             && let Some(epoch) = self.output_fault.take()
         {
@@ -220,7 +241,49 @@ impl App {
     }
 
     pub(super) fn next(&mut self) {
+        self.unavailable_skips = 0;
         self.advance(false);
+    }
+    pub(super) fn track_unavailable(&mut self, user: u64, generation: u64, id: u64) {
+        self.sync_next(false);
+        if self.account != Some(user)
+            || self.play_generation != generation
+            || self.queue.current().map(|t| t.id) != Some(id)
+        {
+            return;
+        }
+        self.sync_next(true);
+        if self.play_generation != generation {
+            return;
+        }
+        if self.unavailable.len() >= 512 {
+            self.unavailable.clear();
+        }
+        self.unavailable.insert(id);
+        self.unavailable_expiry.get_or_insert_with(|| {
+            std::time::Instant::now() + std::time::Duration::from_secs(15 * 60)
+        });
+        self.unavailable_skips = self.unavailable_skips.saturating_add(1);
+        self.buffering = false;
+        self.starved_generation = None;
+        self.actual_quality.clear();
+        if self.paused || self.output_fault.is_some() || self.unavailable_skips >= 5 {
+            self.play_generation = self.backend.player.reserve();
+            self.paused = true;
+            self.ended = false;
+            self.waiting_context = false;
+            self.error = Some(if self.unavailable_skips >= 5 { "Stopped after five unavailable tracks. Choose another track or explicitly retry." } else { "This track is unavailable for this account. Playback remains paused." }.into());
+            return;
+        }
+        self.advance(false);
+        if self.paused && self.ended {
+            self.error = Some("This track is unavailable and no further tracks are queued.".into());
+        } else {
+            self.notice = Some(format!(
+                "Skipped an unavailable track ({} of 5 consecutive attempts).",
+                self.unavailable_skips
+            ));
+        }
     }
     pub(super) fn advance(&mut self, natural: bool) {
         if self.queue_mut().advance(natural) {
@@ -247,6 +310,7 @@ impl App {
         }
     }
     pub(super) fn previous(&mut self) {
+        self.unavailable_skips = 0;
         self.sync_next(true);
         if self.position > 3 {
             if self.buffering {

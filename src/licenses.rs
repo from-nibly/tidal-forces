@@ -11,6 +11,10 @@ pub fn print() {
         include_str!("../assets/fonts/OFL.txt")
     );
     println!(
+        "\nNative Pulse Rust binding (local cancellation fix)\n{}",
+        include_str!("../vendor/libpulse-binding/LICENSE-MIT")
+    );
+    println!(
         "Complete bundled FDK source: run --export-fdk-source PATH to extract the original fdk-aac-sys-0.5.0.crate (gzip tar archive). The Rust application source and Cargo.lock are available at https://github.com/from-nibly/tidal-forces."
     );
 }

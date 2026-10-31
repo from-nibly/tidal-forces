@@ -1,11 +1,50 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.29.0 published and installed; P4 output recovery in development.**
-Published/installed baseline: v0.29.0 (`631423bbdaa0`); published managed pin `ad64197`.
-Scoped installation used deployed-source commit `e33777e` on the exactly reproduced
+**Status: v0.31.0 approved after combined native review; publication/install underway. P5 implementation is authorized after installation, on a new development branch.**
+
+The operator requested one version for the entire remaining P4 scope, not more
+incremental releases. The bundle includes output selection/preferences and route-loss
+guards; optional EQ/preamp/balance/mono and metadata-verified normalization;
+transport/volume ramps; remaining supported-boundary validation; and the planned
+account-scoped unavailable-track styling/bounded skipping. Preserve bypass samples,
+queue occurrences and generation guards. Capability limits must remain explicit:
+missing normalization or AAC trim metadata is not permission to invent values.
+Native hardware/audible validation still needs separate opt-in. P5 is excluded.
+No part of this bundle is to be published separately before combined native review.
+
+### Approved combined P4 implementation (v0.31.0)
+
+- Native Linux PulseAudio/PipeWire-client output selection, sink movement refusal,
+  port/identity monitoring and explicit-retry recovery. Named preferences include
+  identity and port fingerprints; endpoints without stable identity must be selected
+  again after restart. Corrupt preferences fail closed. Compatibility output remains
+  an explicit, unprotected choice—not an automatic fallback.
+- Optional ten-band EQ, preamp, stereo balance/mono and SDK-compatible attenuation
+  normalization. Missing gain stays unavailable; provider peak fields are not
+  interpreted. DSP runs before the PCM ring, defaults off and preserves bypass bits.
+- Complete-frame start/resume/pause/volume ramps and worker-side parameter smoothing.
+  Safety stops remain immediate; native seek/load resets flush queued client audio.
+- Matching FLAC handoffs remain continuous with bypass or stateless matching DSP.
+  Stateful EQ, changed normalization, AAC trim uncertainty and mixed formats retain
+  ordinary transitions. No track crossfade or universal gapless/bit-perfect claim.
+- Dual playback/catalog not-found responses mark tracks unavailable for this account.
+  Markers are bounded, expire within 15 minutes and clear on session change/success.
+  Five consecutive unavailable attempts stop the queue; auth, subscription, readiness,
+  transient and decoder failures do not trigger skipping.
+
+The combined working native preview is approved. Synthetic review and isolated
+null-output contracts do not validate actual headphone unplugging or DAC behavior.
+Real audible/device validation and replacement of the running review preview still
+require separate permission. See
+`docs/audio-processing.md` and `docs/output-validation.md` for contracts and limits.
+P5 is excluded from this release and starts separately after installation.
+
+### Installed foundation
+Published/installed baseline: v0.30.0 (`60fea09e48d3`); published managed pin `7071002`.
+Scoped installation used deployed-source commit `e952a0d` on the exactly reproduced
 baseline, preserving the approved preview, protected services and input setting
 without deploying unrelated canonical source changes.
-The prepared-next/resampling slice passed native review, 360 normal tests,
+The output-recovery slice passed native review, 366 normal tests,
 strict Clippy on both toolchains, isolated contracts and native artifact checks.
 Keep the original phase order: radio continuation stays in P5. Preserve the running
 review preview; new releases and live audio/device tests remain separately gated.
@@ -736,7 +775,7 @@ subsystem to port on the evidence available.
 | F07 | Listening history | **Build locally.** History panel + compact Home shelf. Count listening time, not seek distance; offer clear/disable and account separation. No uploading or fabricated TIDAL history. |
 | F08 | Synced/plain/full-screen lyrics | **Conditional build, TIDAL first.** User-selected presentation: click album artwork for full-screen Now Playing, cover left and lyrics right; never a lyrics drawer. The compatibility library exposes lyrics/subtitles, but verify access; public schema lyrics are internal-only. Plain-text/unavailable states; LRCLIB only with explicit opt-in. |
 | F09 | Gapless and transport/volume smoothing | **Build.** Audio pipeline; no new main navigation. Prefetch the next decoder into bounded storage; test real track boundaries and encoder padding, not just DASH fragments. |
-| F10 | Output picker, EQ, preamp, balance, mono, normalization | **Build in stages.** Devices popover and Playback settings. DSP defaults off. Validate TIDAL gain/peak units before normalization; missing gain means unavailable, not an invented value. |
+| F10 | Output picker, EQ, preamp, balance, mono, normalization | **Approved combined v0.31 bundle.** Playback settings reached from the quality label. DSP defaults off. Verified SDK attenuation policy uses supplied dB gains; unverified provider peak fields are not interpreted, and missing gain stays unavailable. Native review is approved; real hardware validation remains separately gated. |
 | F11 | Repeat-one, persistent shuffle, autoplay | **Build repeat/shuffle.** Player controls. **Adapt autoplay** from available TIDAL track/artist recommendations, with deduplication and bounded fetching; do not promise Spotify's resolver or endless unique tracks. |
 | F12 | Radio browse/refresh/save and other seeds | **Build browse/refresh/save** using existing track/artist radio. Album/playlist seeds stay gated: no corresponding route was established; any composite recommendation feature must be explicitly labeled, not called native TIDAL radio. |
 | F13 | Navigation history, command shortcuts, accessibility | **Build into the foundation.** Back/forward, persistent search entry, focusable semantic controls, shortcut help and virtual-row navigation. Preserve Ctrl+K; add familiar aliases rather than breaking existing keys. |
@@ -1020,7 +1059,7 @@ never add an always-on processing stage to an otherwise bypassed path by acciden
 - Local EQ/normalization do not affect genuine Connect remote playback. Reflect
   this in settings and disable the local PCM visualizer for remote playback.
 
-### P4 playback reliability — unavailable catalog tracks (planned)
+### P4 playback reliability — unavailable catalog tracks (v0.31)
 
 - Confirmed unstreamable songs remain visible but subtly grayed out, like TIDAL's
   desktop/web players. Keep titles readable and retain non-playback actions such
@@ -1035,7 +1074,8 @@ never add an always-on processing stage to an otherwise bypassed path by acciden
   occurrences and generation guards, including duplicate tracks and repeat modes.
 - Verify dimmed-row readability, no-popup behavior, stale/account-scoped evidence,
   recovery, skip bounds and all-unavailable queues with synthetic tests first.
-  This is separate from P5 radio/autoplay and is not implemented in v0.28.0.
+  Implemented conservatively for confirmed playback plus catalog not-found responses
+  in the v0.31 bundle; this is separate from P5 radio/autoplay.
 
 ## 7. Network playback: Google Cast and TIDAL Connect are separate tracks
 

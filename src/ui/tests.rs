@@ -17,7 +17,13 @@ pub(super) fn fixture() -> (
         rx,
         player: crate::audio::Player::inert(),
     };
-    let mut app = App::with_backend(backend, crate::store::Appearance::default());
+    let mut app = App::with_backend(
+        backend,
+        crate::store::Appearance {
+            output: crate::output_devices::Target::SystemDefault,
+            ..Default::default()
+        },
+    );
     app.connected = true;
     app.account = Some(7);
     app.country = "US".into();

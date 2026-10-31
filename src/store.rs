@@ -67,6 +67,8 @@ pub struct Appearance {
     pub zoom: f32,
     pub metadata_cache: bool,
     pub artwork_cache: bool,
+    pub dsp: crate::dsp::Settings,
+    pub output: crate::output_devices::Target,
 }
 impl Default for Appearance {
     fn default() -> Self {
@@ -76,6 +78,8 @@ impl Default for Appearance {
             zoom: 1.,
             metadata_cache: false,
             artwork_cache: false,
+            dsp: crate::dsp::Settings::default(),
+            output: crate::output_devices::Target::RequireSelection,
         }
     }
 }
@@ -88,6 +92,7 @@ impl Appearance {
                 if !appearance.zoom.is_finite() || !(0.75..=1.5).contains(&appearance.zoom) {
                     appearance.zoom = 1.;
                 }
+                appearance.dsp = appearance.dsp.validated();
                 Ok(appearance)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -102,6 +107,21 @@ impl Appearance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_preferences_require_explicit_output_selection() {
+        let legacy: Appearance = serde_json::from_str(r#"{"zoom":1.0}"#).unwrap();
+        assert!(legacy.output == crate::output_devices::Target::RequireSelection);
+        assert!(!legacy.dsp.enabled);
+        let current: Appearance = serde_json::from_str(
+            &serde_json::to_string(&Appearance {
+                output: crate::output_devices::Target::SystemDefault,
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(current.output == crate::output_devices::Target::SystemDefault);
+    }
     #[test]
     fn appearance_round_trips_without_touching_credentials() {
         use crate::visualizer::Mode;

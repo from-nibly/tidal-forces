@@ -503,7 +503,16 @@ impl App {
                     egui::WidgetType::SelectableLabel,
                     ui.is_enabled(),
                     selected,
-                    format!("{} by {}. Enter plays this track.", t.title, t.artist.name),
+                    format!(
+                        "{} by {}. {}",
+                        t.title,
+                        t.artist.name,
+                        if self.unavailable.contains(&t.id) {
+                            "Unavailable in this account. Enter retries."
+                        } else {
+                            "Enter plays this track."
+                        }
+                    ),
                 )
             });
             let mut cover_ui =
@@ -540,8 +549,11 @@ impl App {
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             title.spacing_mut().item_spacing.y = 2.;
-            title.add(
-                egui::Label::new(RichText::new(&t.title).size(14.).color(if playing {
+            let unavailable = self.unavailable.contains(&t.id);
+            let title_response = title.add(
+                egui::Label::new(RichText::new(&t.title).size(14.).color(if unavailable {
+                    MUTED
+                } else if playing {
                     ACCENT
                 } else {
                     TEXT
@@ -549,6 +561,9 @@ impl App {
                 .truncate()
                 .selectable(false),
             );
+            if unavailable {
+                title_response.on_hover_text("Confirmed unavailable for this account. Play retries; markers clear when the account session changes.");
+            }
             title.add(
                 egui::Label::new(
                     RichText::new(format!(

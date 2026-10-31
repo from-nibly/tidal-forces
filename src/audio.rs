@@ -32,6 +32,7 @@ impl Drop for DownloadGuard {
 struct Loaded {
     generation: u64,
     flac: bool,
+    normalization: crate::dsp::Metadata,
     decoder: Arc<crate::audio_buffer::Reusable>,
     quality: String,
     seeker: Option<crate::dash::SeekHandle>,
@@ -193,6 +194,7 @@ enum Command {
     Pause(bool),
     Volume(f32),
     RetryOutput(u64),
+    SelectOutput(crate::output_devices::Target),
     #[cfg(test)]
     FailOutput,
     Stop,
@@ -205,6 +207,8 @@ pub struct Player {
     serial: Arc<AtomicU64>,
     next: Arc<Mutex<Option<NextState>>>,
     pcm: crate::pcm::Pool,
+    pub dsp: Arc<crate::dsp::Control>,
+    pub outputs: Arc<crate::output_devices::Catalog>,
     loaded: Arc<Mutex<Option<Loaded>>>,
     preparing: Arc<tokio::sync::Semaphore>,
     seek_runtime: Arc<OnceLock<(tokio::runtime::Handle, Events)>>,
@@ -224,6 +228,8 @@ impl Player {
             preparing: Arc::new(tokio::sync::Semaphore::new(2)),
             loaded: Arc::new(Mutex::new(None)),
             pcm: crate::pcm::Pool::default(),
+            dsp: Arc::new(crate::dsp::Control::default()),
+            outputs: Arc::new(crate::output_devices::Catalog::default()),
             visualizer: Arc::new(crate::visualizer::Capture::default()),
         }
     }
@@ -239,6 +245,7 @@ impl Player {
             decoder,
             quality: "Fixture FLAC".into(),
             flac: true,
+            normalization: crate::dsp::Metadata::default(),
             seeker: None,
             _download: DownloadGuard::default(),
         });
@@ -268,6 +275,7 @@ impl Player {
             decoder,
             quality: "Fixture next FLAC".into(),
             flac: true,
+            normalization: crate::dsp::Metadata::default(),
             seeker: None,
             _download: DownloadGuard::default(),
         };
@@ -301,6 +309,7 @@ impl Player {
         let staged = next.clone();
         let visualizer = Arc::new(crate::visualizer::Capture::default());
         let capture = visualizer.clone();
+        let outputs = Arc::new(crate::output_devices::Catalog::new(events.clone()));
         std::thread::spawn(move || {
             let mut output = crate::audio_output::Output::default();
             let mut volume = 0.65;
@@ -327,6 +336,7 @@ impl Player {
                 if output.failed() {
                     // Close/join the output before resolving its last possible claim.
                     output.close();
+                    events.send(Event::OutputDetails(output.description()));
                     if let Some(prepared) = pending.take() {
                         if prepared.request.boundary.claimed() {
                             if let Some(transition) = prepared.promote(&sessions, &current) {
@@ -398,6 +408,11 @@ impl Player {
                             });
                             continue;
                         }
+                        if id != current.load(Ordering::SeqCst) {
+                            feedback.cancel();
+                            continue;
+                        }
+                        events.send(Event::OutputDetails(output.description()));
                         capture.invalidate();
                         capture.playing(false);
                         let frame = Frame::new(id, &pcm, feedback, start);
@@ -445,18 +460,15 @@ impl Player {
                     }
                     Ok(Command::Pause(paused)) => {
                         capture.playing(!paused);
-                        if paused {
-                            output.sink.pause();
-                        } else {
-                            output.sink.play();
-                        }
+                        output.pause(paused);
                     }
                     #[cfg(test)]
                     Ok(Command::FailOutput) => output.simulate_failure(),
                     Ok(Command::RetryOutput(epoch)) => recovery.retry(epoch),
+                    Ok(Command::SelectOutput(target)) => output.select(target),
                     Ok(Command::Volume(v)) => {
                         volume = v;
-                        output.sink.set_volume(v);
+                        output.volume(v);
                     }
                     Ok(Command::Stop) => {
                         capture.playing(false);
@@ -467,7 +479,7 @@ impl Player {
                             prepared.cancel();
                         }
                         slot.clear();
-                        output.sink.stop();
+                        output.stop();
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -475,6 +487,7 @@ impl Player {
                 if output.failed() {
                     continue;
                 }
+                output.sync_pause();
                 if let Some(frame) = &active {
                     let id = frame.id;
                     // A just-claimed callback boundary is reconciled on the next
@@ -494,14 +507,14 @@ impl Player {
                         }
                         capture.playing(false);
                         frame.feedback.cancel();
-                        output.sink.stop();
+                        output.stop();
                         active = None;
                         continue;
                     }
                     if frame.feedback.failed() {
                         capture.playing(false);
                         frame.feedback.cancel();
-                        output.sink.stop();
+                        output.stop();
                         active = None;
                         events.send(Event::PlaybackError { generation: id, message: "Audio decoding failed or changed format. Press play to retry from this position.".into() });
                         continue;
@@ -566,6 +579,8 @@ impl Player {
             seek_runtime: Arc::new(OnceLock::new()),
             preparing: Arc::new(tokio::sync::Semaphore::new(2)),
             pcm: crate::pcm::Pool::default(),
+            dsp: Arc::new(crate::dsp::Control::default()),
+            outputs,
             visualizer,
         }
     }
@@ -663,10 +678,26 @@ impl Player {
             "Continuous AAC transitions await priming/padding validation"
         );
         let (loaded, lease) = open_stream(request.boundary.to, stream, 0).await?;
+        let previous = self
+            .loaded
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.normalization);
+        anyhow::ensure!(
+            self.dsp
+                .get()
+                .continuous(previous.unwrap_or_default(), loaded.normalization),
+            "Stateful EQ or changed normalization requires an ordinary transition"
+        );
         if !self.is_preparing(&request) {
             return Ok(());
         }
-        let (pcm, feedback) = self.pcm.start(Box::new(lease))?;
+        let (pcm, feedback) = self.pcm.start(Box::new(crate::dsp::Processed::new(
+            lease,
+            self.dsp.clone(),
+            loaded.normalization,
+        )?))?;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !feedback.ready() {
             if !self.is_preparing(&request) {
@@ -737,7 +768,7 @@ impl Player {
         if !self.current(id) {
             return Ok(());
         }
-        let (decoder, quality) = {
+        let (decoder, quality, normalization) = {
             let loaded = self.loaded.lock().unwrap();
             let loaded = loaded
                 .as_ref()
@@ -745,7 +776,11 @@ impl Player {
                 .ok_or_else(|| {
                     anyhow::anyhow!("The buffered song changed. Press play to reload it.")
                 })?;
-            (loaded.decoder.clone(), loaded.quality.clone())
+            (
+                loaded.decoder.clone(),
+                loaded.quality.clone(),
+                loaded.normalization,
+            )
         };
         let player = self.clone();
         let lease = tokio::task::spawn_blocking(move || {
@@ -756,7 +791,11 @@ impl Player {
             Ok::<_, anyhow::Error>(lease)
         }).await??;
         if self.current(id) {
-            let (pcm, feedback) = self.pcm.start(Box::new(lease))?;
+            let (pcm, feedback) = self.pcm.start(Box::new(crate::dsp::Processed::new(
+                lease,
+                self.dsp.clone(),
+                normalization,
+            )?))?;
             if self
                 .tx
                 .send(Command::Load(id, pcm, quality, feedback, position))
@@ -772,11 +811,22 @@ impl Player {
         Ok(())
     }
 
+    pub fn normalization(&self) -> crate::dsp::Metadata {
+        self.loaded
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|s| self.current(s.generation))
+            .map_or(crate::dsp::Metadata::default(), |s| s.normalization)
+    }
     pub fn current(&self, id: u64) -> bool {
         self.generation.load(Ordering::SeqCst) == id
     }
     pub fn stop(&self) {
         self.reserve();
+    }
+    pub fn select_output(&self, target: crate::output_devices::Target) {
+        let _ = self.tx.send(Command::SelectOutput(target));
     }
     pub fn retry_output(&self, epoch: u64) {
         let _ = self.tx.send(Command::RetryOutput(epoch));
@@ -798,7 +848,11 @@ impl Player {
         }
         let (session, lease) = open_stream(id, stream, position).await?;
         if self.current(id) {
-            let (pcm, feedback) = self.pcm.start(Box::new(lease))?;
+            let (pcm, feedback) = self.pcm.start(Box::new(crate::dsp::Processed::new(
+                lease,
+                self.dsp.clone(),
+                session.normalization,
+            )?))?;
             let mut loaded = self.loaded.lock().unwrap();
             if !self.current(id) {
                 return Ok(());
@@ -825,6 +879,7 @@ async fn open_stream(
 ) -> Result<(Loaded, crate::audio_buffer::Lease)> {
     let quality = stream.label();
     let flac = stream.codec.eq_ignore_ascii_case("flac");
+    let normalization = stream.normalization;
     let mut seeker = None;
     let mut download = DownloadGuard::default();
     let decoder: Box<dyn Source<Item = f32> + Send> = match stream.source {
@@ -858,6 +913,7 @@ async fn open_stream(
             decoder,
             quality,
             flac,
+            normalization,
             seeker,
             _download: download,
         },
