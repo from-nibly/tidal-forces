@@ -16,6 +16,9 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "artists",
             "history",
             "settings",
+            "general",
+            "general-scroll",
+            "radio",
             "privacy",
             "browse",
             "library-load",
@@ -44,7 +47,12 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "output-lost",
             "audio-settings",
             "audio-dsp",
-            "unavailable"
+            "unavailable",
+            "now-playing",
+            "lyrics-plain",
+            "lyrics-missing",
+            "lyrics-rtl",
+            "mini-player"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -54,9 +62,9 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
     let zoom: f32 = args.get(4).map_or(Ok(1.), |v| v.parse())?;
     anyhow::ensure!(
         width.is_finite()
-            && (600. ..=2560.).contains(&width)
+            && ((if page == "mini-player" { 380. } else { 600. })..=2560.).contains(&width)
             && height.is_finite()
-            && (440. ..=1440.).contains(&height)
+            && ((if page == "mini-player" { 250. } else { 440. })..=1440.).contains(&height)
             && (0.75..=1.5).contains(&zoom),
         "Invalid fixture dimensions"
     );
@@ -99,7 +107,7 @@ impl eframe::App for Capture {
         input.modifiers = egui::Modifiers::NONE;
         input.focused = false;
         if ctx
-            .data(|data| data.get_temp::<bool>(egui::Id::new("fixture_audio_dsp_scroll")))
+            .data(|data| data.get_temp::<bool>(egui::Id::new("fixture_settings_scroll")))
             .unwrap_or(false)
         {
             input
@@ -184,7 +192,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
         image::DynamicImage::ImageRgba8(image)
             .write_to(&mut bytes, image::ImageFormat::Png)
             .unwrap();
-        for size in [80, 320] {
+        for size in [80, 320, 640] {
             ctx.include_bytes(
                 cover_url(Some(&format!("fixture-{index}")), size).unwrap(),
                 bytes.get_ref().clone(),
@@ -322,6 +330,16 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.settings_section = SettingsSection::Privacy;
             Page::Settings
         }
+        "mini-player" => {
+            app.fixture_now_playing(ctx, "now-playing");
+            app.close_now_playing(ctx);
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("fixture_mini"), true));
+            Page::Home
+        }
+        "now-playing" | "lyrics-plain" | "lyrics-missing" | "lyrics-rtl" => {
+            app.fixture_now_playing(ctx, page);
+            Page::Home
+        }
         "audio-settings" | "audio-dsp" => {
             app.settings_section = SettingsSection::Playback;
             let target = crate::output_devices::Target::Pulse(
@@ -343,7 +361,7 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.appearance.dsp.normalization = crate::dsp::Normalization::Track;
             ctx.data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("fixture_audio_dsp_scroll"),
+                    egui::Id::new("fixture_settings_scroll"),
                     page == "audio-dsp",
                 )
             });
@@ -353,6 +371,20 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.unavailable
                 .extend(app.tracks.iter().take(2).map(|track| track.id));
             Page::Search
+        }
+        "radio" => Page::Radio(RadioSeed::Track {
+            id: 1,
+            title: "Afterimage".into(),
+        }),
+        "general" | "general-scroll" => {
+            if page == "general-scroll" {
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("fixture_settings_scroll"), true)
+                });
+            }
+            app.settings_section = SettingsSection::General;
+            app.appearance.radio_continuation = true;
+            Page::Settings
         }
         "settings" => {
             app.settings_section = SettingsSection::Appearance;

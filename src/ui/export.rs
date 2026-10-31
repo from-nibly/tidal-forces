@@ -55,9 +55,6 @@ impl App {
             self.export.open = true;
             return;
         }
-        let Some(user) = self.account else {
-            return;
-        };
         let ids = match self.queue.export_ids() {
             Ok(ids) => ids,
             Err(error) => {
@@ -65,15 +62,38 @@ impl App {
                 return;
             }
         };
+        self.open_snapshot_export(ids, format!("Queue · {}", self.queue.title()));
+    }
+    pub(super) fn open_radio_export(&mut self) {
+        let Page::Radio(seed) = &self.page else {
+            return;
+        };
+        if self.loading {
+            return;
+        }
+        self.open_snapshot_export(
+            self.tracks.iter().map(|track| track.id).collect(),
+            seed.title(),
+        );
+    }
+    fn open_snapshot_export(&mut self, ids: Vec<u64>, title: String) {
+        if self.export.transfer.is_some() {
+            self.export.open = true;
+            return;
+        }
+        let Some(user) = self.account else {
+            return;
+        };
+        if ids.is_empty() || ids.len() > crate::queue::MAX_ENTRIES || ids.contains(&0) {
+            self.error = Some("Save between 1 and 50,000 valid loaded tracks.".into());
+            return;
+        }
         self.export.serial = self.export.serial.wrapping_add(1);
         self.export.transfer = Some(Transfer {
             user,
             operation: self.export.serial,
             ids,
-            title: format!("Queue · {}", self.queue.title())
-                .chars()
-                .take(200)
-                .collect(),
+            title: title.chars().take(200).collect(),
             description: String::new(),
             started: false,
             busy: false,
@@ -420,6 +440,9 @@ impl App {
         let mut open = true;
         let mut cancel = false;
         let mut reset = false;
+        let mut reset_radio = false;
+        let can_snapshot_radio =
+            matches!(self.page, Page::Radio(_)) && !self.loading && !self.tracks.is_empty();
         let mut dismiss = false;
         let mut destination = None;
         let paste = self
@@ -427,7 +450,7 @@ impl App {
             .transfer
             .as_ref()
             .is_some_and(|transfer| transfer.paste);
-        egui::Window::new(if paste {"Add songs to playlist"} else {"Save queue as TIDAL playlist"}).open(&mut open).default_width(460.)
+        egui::Window::new(if paste {"Add songs to playlist"} else {"Save tracks as TIDAL playlist"}).open(&mut open).default_width(460.)
             .vscroll(true).max_height((ctx.content_rect().height() - 120.).max(160.)).show(ctx, |ui| {
                 let Some(transfer) = &mut self.export.transfer else { return; };
                 if paste {
@@ -436,7 +459,7 @@ impl App {
                     else if transfer.ids.is_empty() {ui.label(format!("No new songs for ‘{}’",transfer.title));}
                     else {ui.label(format!("Add {} {} to ‘{}’?",transfer.ids.len(),if transfer.ids.len()==1 {"song"} else {"songs"},transfer.title));}
                 }
-                else {ui.label(format!("{} songs · includes repeated songs",transfer.ids.len()));ui.label("Saves your current queue. Later queue changes won’t affect this playlist.");}
+                else {ui.label(format!("{} songs · includes repeated songs",transfer.ids.len()));ui.label("Saves this fixed track snapshot. Later queue or radio-view changes won’t affect this playlist.");}
                 if !transfer.started {
                     if paste {
                         if let Some(unique)=&transfer.unique_ids {
@@ -469,6 +492,7 @@ impl App {
                     if transfer.confirmed != transfer.ids.len() && !transfer.cancelled.load(Ordering::Acquire) && ui.button("Stop adding songs").clicked() { cancel = true; }
                 }
                 if (!transfer.busy || !transfer.started) && ui.button(if paste {"Close"} else {"Start a new queue snapshot…"}).clicked() { if paste {dismiss=true;} else {reset=true;} }
+                if !paste && can_snapshot_radio && (!transfer.busy || !transfer.started) && ui.button("Start a new loaded radio snapshot…").clicked() { reset_radio = true; }
             });
         if !open || cancel {
             let forget_draft = !open
@@ -483,9 +507,13 @@ impl App {
         if dismiss {
             self.cancel_export(true);
         }
-        if reset {
+        if reset || reset_radio {
             self.cancel_export(true);
-            self.open_queue_export();
+            if reset_radio {
+                self.open_radio_export();
+            } else {
+                self.open_queue_export();
+            }
         }
         if let Some(page) = destination {
             self.navigate(page);

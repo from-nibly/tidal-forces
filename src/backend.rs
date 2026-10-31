@@ -12,6 +12,18 @@ use std::{
 use tokio::sync::mpsc as async_mpsc;
 
 pub enum Request {
+    Recommendations {
+        user: u64,
+        serial: u64,
+        id: u64,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    },
+    Lyrics {
+        user: u64,
+        serial: u64,
+        id: u64,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    },
     BeginPkce,
     FinishPkce(String),
     CancelPkce,
@@ -166,16 +178,28 @@ pub enum Request {
         generation: u64,
         id: u64,
         quality: String,
-        position: u64,
+        position: Duration,
     },
     PrepareNext(crate::audio::NextRequest),
     SeekBuffered {
         generation: u64,
-        position: u64,
+        position: Duration,
     },
 }
 
 pub enum Event {
+    Recommendations {
+        user: u64,
+        serial: u64,
+        result: Result<Vec<Track>, String>,
+    },
+    Lyrics {
+        user: u64,
+        serial: u64,
+        id: u64,
+        result: Result<Option<crate::lyrics::Lyrics>, String>,
+    },
+    OutputSelectionFailed,
     OutputsChanged,
     OutputDetails(String),
     TrackUnavailable {
@@ -342,7 +366,7 @@ pub enum Event {
     },
     Position {
         generation: u64,
-        seconds: u64,
+        position: Duration,
     },
     Ended(u64),
     PlaybackError {
@@ -425,6 +449,10 @@ impl Backend {
                     }
                 } else { events.send(Event::Session(None)); }
                 credential_event(&api, &events, false);
+                let mut recommendation_job: Option<tokio::task::JoinHandle<()>> = None;
+                let recommendation_permit = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+                let mut lyrics_job: Option<tokio::task::JoinHandle<()>> = None;
+                let lyrics_permit = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
                 let mut pkce = None;
                 let mut login: Option<(DeviceLogin, Instant, Instant)> = None;
                 let mut ticker = tokio::time::interval(Duration::from_secs(1));
@@ -432,6 +460,10 @@ impl Backend {
                     tokio::select! {
                         request = requests.recv() => {
                             let Some(request) = request else { break; };
+                            if matches!(&request, Request::Logout | Request::ReloadCredentials | Request::FinishPkce(_))
+                                && let Some(job) = lyrics_job.take() { job.abort(); }
+                            if matches!(&request, Request::Logout | Request::ReloadCredentials | Request::FinishPkce(_))
+                                && let Some(job) = recommendation_job.take() { job.abort(); }
                             let request_generation = match &request {
                                 Request::Search { generation, .. } | Request::Library { generation, .. } |
                                 Request::Collection { generation, .. } | Request::Home { generation } |
@@ -445,6 +477,40 @@ impl Backend {
                             let playback_generation = match &request { Request::Play { generation, .. } | Request::SeekBuffered { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
                                 match request {
+                                    Request::Recommendations { user, serial, id, mut cancel } => {
+                                        if !matches!(cancel.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) { return Ok(()); }
+                                        if let Some(job) = recommendation_job.take() { job.abort(); }
+                                        let request = api.recommendation_request(user, id);
+                                        let events = events.clone();
+                                        let permit = recommendation_permit.clone();
+                                        recommendation_job = Some(tokio::spawn(async move {
+                                            tokio::select! {
+                                                biased;
+                                                _ = &mut cancel => {},
+                                                result = async move {
+                                                    let _permit = permit.acquire_owned().await?;
+                                                    crate::recommendations::fetch(request?).await
+                                                } => events.send(Event::Recommendations { user, serial, result: result.map_err(|error: anyhow::Error| error.to_string()) }),
+                                            }
+                                        }));
+                                    }
+                                    Request::Lyrics { user, serial, id, mut cancel } => {
+                                        if !matches!(cancel.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) { return Ok(()); }
+                                        if let Some(job) = lyrics_job.take() { job.abort(); }
+                                        let request = api.lyrics_request(user, id);
+                                        let events = events.clone();
+                                        let permit = lyrics_permit.clone();
+                                        lyrics_job = Some(tokio::spawn(async move {
+                                            tokio::select! {
+                                                biased;
+                                                _ = &mut cancel => {},
+                                                result = async move {
+                                                    let _permit = permit.acquire_owned().await?;
+                                                    crate::lyrics::fetch(request?, id).await
+                                                } => events.send(Event::Lyrics { user, serial, id, result: result.map_err(|error: anyhow::Error| error.to_string()) }),
+                                            }
+                                        }));
+                                    }
                                     Request::BeginPkce => {
                                         let p = crate::auth::Pkce::new();
                                         events.send(Event::PkceReady(p.url()));
@@ -713,7 +779,7 @@ mod tests {
         let (catalog, _blocked) = async_mpsc::channel(1);
         catalog.send(Request::Home { generation: 1 }).await.unwrap();
         let generation = player.reserve_seek(0).unwrap();
-        assert!(player.dispatch_seek(generation, 1));
+        assert!(player.dispatch_seek(generation, Duration::from_secs(1)));
         let event =
             tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(3)))
                 .await

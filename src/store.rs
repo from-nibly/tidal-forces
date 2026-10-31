@@ -67,6 +67,9 @@ pub struct Appearance {
     pub zoom: f32,
     pub metadata_cache: bool,
     pub artwork_cache: bool,
+    pub radio_continuation: bool,
+    pub tray_enabled: bool,
+    pub mini_on_top: bool,
     pub dsp: crate::dsp::Settings,
     pub output: crate::output_devices::Target,
 }
@@ -78,8 +81,11 @@ impl Default for Appearance {
             zoom: 1.,
             metadata_cache: false,
             artwork_cache: false,
+            radio_continuation: false,
+            tray_enabled: false,
+            mini_on_top: false,
             dsp: crate::dsp::Settings::default(),
-            output: crate::output_devices::Target::RequireSelection,
+            output: crate::output_devices::Target::SystemDefault,
         }
     }
 }
@@ -93,6 +99,13 @@ impl Appearance {
                     appearance.zoom = 1.;
                 }
                 appearance.dsp = appearance.dsp.validated();
+                match &mut appearance.output {
+                    crate::output_devices::Target::Pulse(_, identity) => identity.clear(),
+                    crate::output_devices::Target::RequireSelection => {
+                        appearance.output = crate::output_devices::Target::SystemDefault
+                    }
+                    _ => {}
+                }
                 Ok(appearance)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -108,9 +121,9 @@ impl Appearance {
 mod tests {
     use super::*;
     #[test]
-    fn legacy_preferences_require_explicit_output_selection() {
+    fn legacy_preferences_default_to_os_routing() {
         let legacy: Appearance = serde_json::from_str(r#"{"zoom":1.0}"#).unwrap();
-        assert!(legacy.output == crate::output_devices::Target::RequireSelection);
+        assert!(legacy.output == crate::output_devices::Target::SystemDefault);
         assert!(!legacy.dsp.enabled);
         let current: Appearance = serde_json::from_str(
             &serde_json::to_string(&Appearance {

@@ -192,6 +192,15 @@ impl App {
                     .color(MUTED),
             );
         }
+        if self.appearance.radio_continuation {
+            let message = self
+                .radio
+                .message
+                .as_deref()
+                .unwrap_or("Track recommendation continuation enabled");
+            ui.add(egui::Label::new(RichText::new(message).size(11.).color(MUTED)).truncate())
+                .on_hover_text(message);
+        }
         ui.separator();
         if !self.queue.title().is_empty() {
             ui.add(

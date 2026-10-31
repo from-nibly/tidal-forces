@@ -160,8 +160,8 @@ fn seek_after_claim_uses_promoted_song_and_unique_generation() {
         requests.try_recv(),
         Ok(Request::SeekBuffered {
             generation: 2,
-            position: 1
-        })
+            position
+        }) if position == std::time::Duration::from_secs(1)
     ));
     assert!(app.buffering);
 }
@@ -177,8 +177,8 @@ fn seek_before_claim_cancels_next_and_never_reuses_its_generation() {
         requests.try_recv(),
         Ok(Request::SeekBuffered {
             generation: 2,
-            position: 10
-        })
+            position
+        }) if position == std::time::Duration::from_secs(10)
     ));
 }
 #[test]
@@ -232,9 +232,9 @@ fn output_loss_pauses_at_rendered_position_and_requires_an_explicit_retry() {
         Ok(Request::Play {
             generation: 2,
             id: 1,
-            position: 157,
+            position,
             ..
-        })
+        }) if position == std::time::Duration::from_secs(157)
     ));
     assert!(!app.paused && app.buffering);
 }

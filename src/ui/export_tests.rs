@@ -1,5 +1,26 @@
 use super::super::tests::{fixture, track};
 use super::*;
+#[test]
+fn radio_export_is_an_explicit_fixed_draft_not_a_playback_or_account_mutation() {
+    let (_, mut app, _, mut requests) = fixture();
+    app.page = Page::Radio(RadioSeed::Track {
+        id: 9,
+        title: "Seed".into(),
+    });
+    app.tracks = vec![track(10), track(11), track(10)];
+    let revision = app.queue.revision();
+    app.open_radio_export();
+    let transfer = app.export.transfer.as_ref().unwrap();
+    assert_eq!(transfer.user, 7);
+    assert_eq!(transfer.ids, vec![10, 11, 10]);
+    assert!(!transfer.started && !transfer.busy);
+    app.tracks.clear();
+    app.export_tick();
+    assert_eq!(app.export.transfer.as_ref().unwrap().ids, vec![10, 11, 10]);
+    assert_eq!(app.queue.revision(), revision);
+    assert!(requests.try_recv().is_err());
+}
+
 fn playlist() -> Playlist {
     Playlist {
         uuid: "test-list".into(),

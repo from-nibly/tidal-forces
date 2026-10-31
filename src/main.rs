@@ -1,4 +1,5 @@
 mod aac;
+mod actions;
 mod api;
 mod artwork_cache;
 mod audio;
@@ -21,17 +22,21 @@ mod install;
 mod library;
 mod licenses;
 mod links;
+mod lyrics;
 mod metadata_cache;
 mod model;
 mod output_devices;
 mod pcm;
 mod pins;
+mod playback_position;
 mod player_state;
 #[cfg(target_os = "linux")]
 mod pulse_output;
 mod queue;
+mod recommendations;
 mod reorder;
 mod store;
+mod tray;
 mod ui;
 mod visualizer;
 mod visualizer_ui;
@@ -75,6 +80,9 @@ mod window_tests {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some((command, value)) = actions::cli(&args)? {
+        return links::Instance::control(command, value);
+    }
     #[cfg(debug_assertions)]
     if args.first().is_some_and(|arg| arg == "--visual-fixture") {
         return ui::visual_fixture::capture(&args[1..]);
@@ -114,7 +122,7 @@ fn main() -> Result<()> {
         }
         Some("--help") => {
             println!(
-                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of preferred-quality audio; --seek also tests pause and seek\n  --version           Show version\n  --licenses          Show bundled codec and font license notices\n  --export-fdk-source PATH  Export the complete bundled AAC codec source\n  --open URI          Open a tidal:// or official TIDAL web link\n\nStart without arguments to open the player, or pass a TIDAL URI directly."
+                "Tidal Forces — native TIDAL player\n\n  --install           Install this binary and a desktop launcher for this user\n  --audio-test        Play a quiet 150 ms test tone\n  --check-account     Verify saved account, search, favorites and playlists\n  --verify-playback ID  Verify 9s of preferred-quality audio; --seek also tests pause and seek\n  --version           Show version\n  --licenses          Show bundled codec and font license notices\n  --export-fdk-source PATH  Export the complete bundled AAC codec source\n  --open URI          Open a tidal:// or official TIDAL web link\n  --play / --pause / --toggle / --next / --previous / --stop\n  --seek SECONDS / --seek-by SIGNED_SECONDS / --volume PERCENT\n  --now-playing / --mini-player / --raise / --quit\n                      Control the running player (commands are queued)\n\nStart without arguments to open the player, or pass a TIDAL URI directly."
             );
             return Ok(());
         }
@@ -255,7 +263,7 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
         generation,
         id,
         quality: "LOSSLESS".into(),
-        position: 0,
+        position: std::time::Duration::ZERO,
     })?;
     let start = Instant::now();
     let mut seeking = false;
@@ -277,7 +285,7 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                     backend.player.pause(false);
                     println!("Decoder started: {quality}");
                 }
-                Event::Position { seconds, .. } if !seeking && seconds >= 9 => {
+                Event::Position { position, .. } if !seeking && position.as_secs() >= 9 => {
                     if seek {
                         backend.player.pause(true);
                         std::thread::sleep(Duration::from_millis(500));
@@ -287,7 +295,7 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                             })?;
                         backend.tx.blocking_send(Request::SeekBuffered {
                             generation,
-                            position: 45,
+                            position: std::time::Duration::from_secs(45),
                         })?;
                         seeking = true;
                         println!(
@@ -296,12 +304,13 @@ fn verify_playback(id: u64, seek: bool) -> Result<()> {
                     } else {
                         backend.player.stop();
                         println!(
-                            "Verified authenticated playback across segment boundaries for {seconds}s."
+                            "Verified authenticated playback across segment boundaries for {}s.",
+                            position.as_secs()
                         );
                         return Ok(());
                     }
                 }
-                Event::Position { seconds, .. } if seeking && seconds >= 50 => {
+                Event::Position { position, .. } if seeking && position.as_secs() >= 50 => {
                     backend.player.stop();
                     println!(
                         "Verified continuous playback, pause/resume, seek, and playback after seeking."

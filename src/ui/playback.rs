@@ -46,7 +46,7 @@ pub(super) struct RestoreGuard {
     volume: f32,
     quality: String,
     explicit_link: bool,
-    preserve_view: bool,
+    pub(super) preserve_view: bool,
 }
 
 impl App {
@@ -55,15 +55,21 @@ impl App {
     }
 
     pub(super) fn play_at(&mut self, position: u64) {
+        self.play_from(Duration::from_secs(position));
+    }
+
+    pub(super) fn play_from(&mut self, position: Duration) {
         self.sync_next(true);
         let Some(track) = self.queue.current() else {
             return;
         };
         let id = track.id;
-        let position = position.min(track.duration.saturating_sub(1));
+        let position = position.min(Duration::from_secs(track.duration.saturating_sub(1)));
+        self.play_generation = self.backend.player.reserve();
+        self.position = position.as_secs();
+        self.position_clock
+            .target(self.play_generation, position, Instant::now());
         if self.appearance.output == crate::output_devices::Target::RequireSelection {
-            self.play_generation = self.backend.player.reserve();
-            self.position = position;
             self.paused = true;
             self.paused_since = None;
             self.buffering = false;
@@ -79,8 +85,6 @@ impl App {
             self.navigate(Page::Settings);
             return;
         }
-        self.play_generation = self.backend.player.reserve();
-        self.position = position;
         self.paused = false;
         self.paused_since = None;
         self.buffering = true;
@@ -232,7 +236,7 @@ impl App {
         } else if self.actual_quality.is_empty()
             || (self.paused && refresh_after_pause(self.paused_since, SystemTime::now()))
         {
-            self.play_at(self.position);
+            self.play_from(self.position_time());
         } else {
             self.paused = !self.paused;
             self.paused_since = self.paused.then(SystemTime::now);
@@ -323,6 +327,7 @@ impl App {
         }
     }
     pub(super) fn cancel_context(&mut self) {
+        self.radio.reset();
         self.context_generation = self.context_generation.wrapping_add(1);
         self.context_loading = false;
         self.context_error = None;
@@ -340,6 +345,8 @@ impl App {
     pub(super) fn clear_source(&mut self) {
         self.cancel_context();
         self.queue_mut().clear_context();
+        self.radio
+            .stop("Source cleared. Start another source or explicitly re-enable recommendations.");
     }
     pub(super) fn stop_and_clear(&mut self) {
         self.cancel_context();

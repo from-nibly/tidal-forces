@@ -337,6 +337,61 @@ impl Api {
         bail!("TIDAL did not accept the refreshed sign-in")
     }
 
+    pub fn recommendation_request(&self, user: u64, track: u64) -> Result<reqwest::RequestBuilder> {
+        let session = self
+            .session
+            .as_ref()
+            .context("Sign in to load recommendations")?;
+        anyhow::ensure!(
+            user != 0 && session.user_id == user && track != 0,
+            "Account changed; recommendations were not requested"
+        );
+        anyhow::ensure!(
+            session.expires_at > store::now() + 60,
+            "Refresh the sign-in through playback before requesting recommendations"
+        );
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(8))
+            .user_agent(concat!("TidalForces/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(client
+            .get(format!("{}/v1/tracks/{track}/radio", self.base))
+            .bearer_auth(&session.access_token)
+            .query(&[
+                ("countryCode", session.country.as_str()),
+                ("limit", "100"),
+                ("offset", "0"),
+            ]))
+    }
+
+    pub fn lyrics_request(&self, user: u64, track: u64) -> Result<reqwest::RequestBuilder> {
+        let session = self
+            .session
+            .as_ref()
+            .context("Sign in to load TIDAL lyrics")?;
+        anyhow::ensure!(
+            user != 0 && session.user_id == user && track != 0,
+            "Account changed; lyrics were not requested"
+        );
+        // This background read must not independently refresh or persist a token.
+        anyhow::ensure!(
+            session.expires_at > store::now() + 60,
+            "Refresh the sign-in through playback before retrying lyrics"
+        );
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(8))
+            .user_agent(concat!("TidalForces/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(client
+            .get(format!("{}/v1/tracks/{track}/lyrics", self.base))
+            .bearer_auth(&session.access_token)
+            .query(&[("countryCode", session.country.as_str())]))
+    }
+
     pub async fn search(&mut self, query: &str) -> Result<Search> {
         let v = self
             .get(
@@ -1409,6 +1464,12 @@ mod folder_api;
 #[cfg(test)]
 #[path = "availability_tests.rs"]
 mod availability_tests;
+#[cfg(test)]
+#[path = "lyrics_api_tests.rs"]
+mod lyrics_api_tests;
+#[cfg(test)]
+#[path = "recommendation_api_tests.rs"]
+mod recommendation_api_tests;
 
 #[cfg(test)]
 #[path = "context_tests.rs"]

@@ -712,9 +712,9 @@ fn restored_radio_stays_paused_and_play_resolves_the_saved_occurrence_and_positi
         requests.try_recv(),
         Ok(Request::Play {
             id: 9,
-            position: 45,
+            position,
             ..
-        })
+        }) if position == std::time::Duration::from_secs(45)
     ));
 }
 

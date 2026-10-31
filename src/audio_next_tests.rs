@@ -85,7 +85,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     player.select_output(crate::output_devices::Target::CompatibilityDefault);
     let id = player.reserve();
     let (source, server) = stream();
-    player.load(id, source, 0).await.unwrap();
+    player.load(id, source, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     let Event::OutputLost {
         generation, epoch, ..
@@ -102,7 +102,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     // A healthy endpoint alone, or a new track generation, must not resume output.
     let id = player.reserve();
     let (source, server) = stream();
-    player.load(id, source, 0).await.unwrap();
+    player.load(id, source, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     let Event::OutputLost {
         generation,
@@ -116,7 +116,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     player.retry_output(epoch);
     let id = player.reserve();
     let (source, server) = stream();
-    player.load(id, source, 0).await.unwrap();
+    player.load(id, source, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     let event = receive(&rx, |e| {
         matches!(e, Event::Playing { .. } | Event::OutputLost { .. })
@@ -137,7 +137,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     player.retry_output(epoch); // stale acknowledgement must not reopen anything
     let id = player.reserve();
     let (source, server) = stream();
-    player.load(id, source, 0).await.unwrap();
+    player.load(id, source, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     let Event::OutputLost {
         generation, epoch, ..
@@ -149,7 +149,7 @@ async fn output_recovery_on_isolated_null_alsa() {
     player.retry_output(newer);
     let id = player.reserve();
     let (source, server) = stream();
-    player.load(id, source, 0).await.unwrap();
+    player.load(id, source, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     assert!(
         matches!(receive(&rx, |e| matches!(e, Event::Playing { .. } | Event::OutputLost { .. })), Event::Playing { generation, .. } if generation == id)
@@ -184,12 +184,12 @@ async fn prepared_flac_joins_and_seeks_after_fixture_servers_are_closed() {
     let id = player.reserve();
     assert!(matches!(rx.recv().unwrap(), Command::Stop));
     let (current, server) = stream();
-    player.load(id, current, 0).await.unwrap();
+    player.load(id, current, Duration::ZERO).await.unwrap();
     server.join().unwrap();
     let Command::Load(_, pcm, _, feedback, _) = rx.recv().unwrap() else {
         panic!("Expected current PCM");
     };
-    let previous = Frame::new(id, &pcm, feedback, 0);
+    let previous = Frame::new(id, &pcm, feedback, Duration::ZERO);
     let request = player.begin_next(key(id)).unwrap();
     let (next, server) = stream();
     player.prepare_next(request.clone(), next).await.unwrap();
@@ -258,7 +258,7 @@ async fn prepared_flac_joins_and_seeks_after_fixture_servers_are_closed() {
     drop(chain);
     let seek = player.reserve_seek(transition.generation).unwrap();
     assert!(matches!(rx.recv().unwrap(), Command::Stop));
-    player.seek_buffered(seek, 0).await.unwrap();
+    player.seek_buffered(seek, Duration::ZERO).await.unwrap();
     let Command::Load(generation, mut pcm, _, feedback, _) = rx.recv().unwrap() else {
         panic!("Expected local next-song seek");
     };
@@ -309,7 +309,7 @@ async fn cancelled_preparation_cannot_arm_and_aac_is_not_claimed_gapless() {
     let Command::Prepare(token, pcm, session, feedback) = rx.recv().unwrap() else {
         panic!("Expected preparation");
     };
-    let frame = Frame::new(0, &pcm, feedback.clone(), 0);
+    let frame = Frame::new(0, &pcm, feedback.clone(), Duration::ZERO);
     let replacement = player.reserve();
     assert_ne!(replacement, request.boundary.to);
     let slot = Slot::default();

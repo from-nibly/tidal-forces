@@ -16,7 +16,7 @@ fn buffered(
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
-    let frame = Frame::new(id, &source, feedback, 0);
+    let frame = Frame::new(id, &source, feedback, Duration::ZERO);
     (source, frame)
 }
 fn pair(
@@ -188,7 +188,7 @@ fn next_track_underflow_is_silence_without_next_listening_credit() {
         }))
         .unwrap();
     waiting.recv_timeout(Duration::from_secs(3)).unwrap();
-    let second = Frame::new(11, &next, feedback, 0);
+    let second = Frame::new(11, &next, feedback, Duration::ZERO);
     let boundary = Arc::new(Boundary::new(7, 11, 0));
     slot.arm(
         next,

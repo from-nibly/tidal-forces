@@ -1,6 +1,6 @@
 use crate::{
     backend::{Backend, Event, Request},
-    desktop::{DesktopControls, MediaControlEvent},
+    desktop::DesktopControls,
     library::{Favorite, FavoriteKind, Favorites},
     links::{Instance, Link},
     model::{
@@ -14,6 +14,7 @@ use crate::{
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
+mod actions;
 mod album_load;
 #[cfg(test)]
 mod availability_tests;
@@ -26,7 +27,9 @@ mod history;
 mod library;
 mod library_load;
 mod library_view;
+mod mini;
 pub(crate) mod navigation;
+mod now_playing;
 #[cfg(test)]
 mod pcm_tests;
 mod pins;
@@ -38,6 +41,7 @@ mod playlist_delete;
 mod playlist_drag;
 mod playlist_load;
 mod playlist_metadata;
+mod radio;
 mod reorder;
 mod side_panel;
 use playback::RestoreGuard;
@@ -62,6 +66,7 @@ use theme::*;
 
 enum TrackAction {
     Radio(RadioSeed),
+    BrowseRadio(RadioSeed),
     Add(Track),
     Queue(Track, bool),
 }
@@ -175,6 +180,12 @@ pub struct App {
     paused_since: Option<std::time::SystemTime>,
     ended: bool,
     position: u64,
+    position_clock: crate::playback_position::Position,
+    now_playing: now_playing::NowPlaying,
+    radio: radio::Radio,
+    mini_open: bool,
+    tray: Option<crate::tray::Tray>,
+    quitting: bool,
     volume: f32,
     quality: String,
     actual_quality: String,
@@ -346,6 +357,12 @@ impl App {
             paused_since: None,
             ended: false,
             position: 0,
+            position_clock: crate::playback_position::Position::default(),
+            now_playing: now_playing::NowPlaying::default(),
+            radio: radio::Radio::default(),
+            mini_open: false,
+            tray: None,
+            quitting: false,
             volume: 0.65,
             quality: "LOSSLESS".into(),
             actual_quality: String::new(),
@@ -402,6 +419,9 @@ impl App {
                     self.buffering = false;
                     self.paused = true;
                 }
+                Request::Recommendations { .. } => self
+                    .radio
+                    .stop("The worker is busy. Re-enable recommendation continuation to retry."),
                 Request::ContextPage { .. } => {
                     self.context_loading = false;
                     self.context_error =
@@ -455,6 +475,10 @@ impl App {
     }
 
     fn navigate(&mut self, page: Page) {
+        self.navigate_mode(page, true);
+    }
+
+    fn navigate_mode(&mut self, page: Page, autoplay: bool) {
         let to = Location {
             query: if page == Page::Search {
                 self.query.trim().into()
@@ -464,7 +488,7 @@ impl App {
             page,
         };
         self.navigation.visit(self.location(), &to);
-        self.show_location(to, true);
+        self.show_location(to, autoplay);
     }
 
     fn history(&mut self, forward: bool) {
@@ -480,6 +504,7 @@ impl App {
     }
 
     fn show_location(&mut self, location: Location, autoplay: bool) {
+        self.now_playing.close();
         self.cancel_folder_edit();
         self.cancel_delete_playlist();
         self.cancel_reorder();
@@ -858,7 +883,20 @@ impl App {
                         self.quality = if pkce { "LOSSLESS" } else { "HIGH" }.into();
                     }
                 }
+                Event::Recommendations {
+                    user,
+                    serial,
+                    result,
+                } => self.radio_result(user, serial, result),
+                Event::Lyrics {
+                    user,
+                    serial,
+                    id,
+                    result,
+                } => self.lyrics_result(user, serial, id, result),
                 Event::Session(account) => {
+                    self.radio.reset();
+                    self.now_playing.reset();
                     self.unavailable.clear();
                     self.unavailable_expiry = None;
                     self.unavailable_skips = 0;
@@ -1131,8 +1169,12 @@ impl App {
                 } => self.observe_listening(generation, rendered, elapsed),
                 Event::Position {
                     generation,
-                    seconds,
-                } if generation == self.play_generation => self.position = seconds,
+                    position,
+                } if generation == self.play_generation => {
+                    self.position = position.as_secs();
+                    self.position_clock
+                        .observe(generation, position, std::time::Instant::now());
+                }
                 Event::Ended(generation) if generation == self.play_generation => {
                     self.starved_generation = None;
                     if self
@@ -1189,6 +1231,7 @@ impl App {
                         self.unavailable.remove(&id);
                     }
                 }
+                Event::OutputSelectionFailed => self.notice = Some("The audio server could not apply the requested output. Playback keeps its OS-managed route; refresh outputs and choose again.".into()),
                 Event::OutputsChanged => {}
                 Event::OutputDetails(details) => self.output_details = details,
                 Event::OutputLost {
@@ -1227,69 +1270,36 @@ impl App {
         }
     }
 
-    fn desktop_events(&mut self, ctx: &egui::Context) {
-        let events: Vec<_> = self
-            .media
-            .as_ref()
-            .map(|m| m.events.try_iter().collect())
-            .unwrap_or_default();
-        for event in events {
-            if !matches!(
-                &event,
-                MediaControlEvent::SetVolume(_) | MediaControlEvent::Raise
-            ) {
-                self.sync_next(true);
-                self.next_attempt = None;
-            }
-            match event {
-                MediaControlEvent::Toggle => self.toggle(),
-                MediaControlEvent::Play if self.paused => self.toggle(),
-                MediaControlEvent::Pause if !self.paused => self.toggle(),
-                MediaControlEvent::Next => self.next(),
-                MediaControlEvent::Previous => self.previous(),
-                MediaControlEvent::Stop => self.stop_and_clear(),
-                MediaControlEvent::SetPosition(p) => self.seek(p.0.as_secs()),
-                MediaControlEvent::SeekBy(direction, duration) => {
-                    let pos = if direction == souvlaki::SeekDirection::Forward {
-                        self.position.saturating_add(duration.as_secs())
-                    } else {
-                        self.position.saturating_sub(duration.as_secs())
-                    };
-                    self.seek(pos);
-                }
-                MediaControlEvent::Seek(direction) => {
-                    self.seek(if direction == souvlaki::SeekDirection::Forward {
-                        self.position.saturating_add(10)
-                    } else {
-                        self.position.saturating_sub(10)
-                    });
-                }
-                MediaControlEvent::SetVolume(v) if v.is_finite() => {
-                    self.volume = v.clamp(0., 1.) as f32;
-                    self.backend.player.volume(self.volume);
-                }
-                MediaControlEvent::OpenUri(uri) => match Link::parse(&uri) {
-                    Ok(link) => self.open_link(link),
-                    Err(e) => self.error = Some(e.to_string()),
-                },
-                MediaControlEvent::Raise => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
-                MediaControlEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                _ => {}
-            }
-        }
-    }
-
     fn audio_buffering(&self) -> bool {
         self.buffering || self.starved_generation == Some(self.play_generation)
     }
 
+    fn position_time(&self) -> std::time::Duration {
+        self.position_clock
+            .read(
+                self.play_generation,
+                self.position,
+                !self.paused && !self.audio_buffering() && !self.ended,
+                std::time::Instant::now(),
+            )
+            .min(std::time::Duration::from_secs(
+                self.queue.current().map_or(0, |track| track.duration),
+            ))
+    }
+
     fn seek(&mut self, seconds: u64) {
+        self.seek_time(std::time::Duration::from_secs(seconds));
+    }
+
+    fn seek_time(&mut self, position: std::time::Duration) {
         self.sync_next(true);
         if self.buffering {
             return;
         }
         if let Some(t) = self.queue.current() {
-            self.position = seconds.min(t.duration.saturating_sub(1));
+            let position =
+                position.min(std::time::Duration::from_secs(t.duration.saturating_sub(1)));
+            self.position = position.as_secs();
             if !self.actual_quality.is_empty() && !self.ended {
                 if let Some(generation) = self.backend.player.reserve_seek(self.play_generation) {
                     self.play_generation = generation;
@@ -1303,17 +1313,19 @@ impl App {
                     }
                     self.send(Request::SeekBuffered {
                         generation,
-                        position: self.position,
+                        position,
                     });
                 } else {
                     let paused = self.paused;
-                    self.play_at(self.position);
+                    self.play_from(position);
                     self.paused = paused;
                 }
             } else {
                 self.ended = false;
                 self.actual_quality.clear();
             }
+            self.position_clock
+                .target(self.play_generation, position, std::time::Instant::now());
         }
     }
 
@@ -1350,6 +1362,10 @@ impl App {
             .map(|i| i.events.try_iter().collect())
             .unwrap_or_default();
         for link in events {
+            if let Some(tray) = &self.tray {
+                tray.show();
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if let Some(link) = link {
@@ -1373,6 +1389,7 @@ impl App {
     fn apply_track_action(&mut self, action: TrackAction) {
         match action {
             TrackAction::Radio(seed) => self.navigate(Page::Radio(seed)),
+            TrackAction::BrowseRadio(seed) => self.navigate_mode(Page::Radio(seed), false),
             TrackAction::Add(track) => self.open_playlist_dialog(Some(track)),
             TrackAction::Queue(track, next) => self.queue_track(track, next),
         }
@@ -1635,6 +1652,8 @@ impl App {
     }
 
     fn player_bar(&mut self, ctx: &egui::Context) {
+        let mut now_playing = false;
+        let mut mini_player = false;
         let mut output_settings = false;
         let mut radio = None;
         let mut favorite = None;
@@ -1683,8 +1702,10 @@ impl App {
                         |ui| {
                             ui.set_min_size(vec2(width * 0.29, 74.));
                             if let Some(track) = self.queue.current() {
-                                artwork(ui, track.cover_url(80), cover_size)
-                                    .context_menu(|ui| track_menu(ui, track, &mut radio));
+                                let cover = artwork(ui, track.cover_url(80), cover_size).on_hover_text("Open Now Playing · L");
+                                cover.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open Now Playing"));
+                                now_playing |= cover.clicked();
+                                cover.context_menu(|ui| track_menu(ui, track, &mut radio));
                                 ui.vertical(|ui| {
                                     ui.add_space(9.);
                                     ui.add(
@@ -1834,7 +1855,7 @@ impl App {
                                         );
                                         let duration =
                                             self.queue.current().map_or(0, |t| t.duration);
-                                        let mut position = self.position as f64;
+                                        let mut position = self.position_time().as_secs_f64();
                                         ui.scope(|ui| {
                                             ui.spacing_mut().slider_width =
                                                 (width * 0.42 - 105.).max(60.);
@@ -1849,7 +1870,7 @@ impl App {
                                             if response.drag_stopped()
                                                 || (response.changed() && !response.dragged())
                                             {
-                                                self.seek(position as u64);
+                                                self.seek_time(std::time::Duration::from_secs_f64(position));
                                             }
                                         });
                                         ui.label(
@@ -1868,7 +1889,12 @@ impl App {
                             if icon_button(ui, Icon::Queue, "Show queue", self.queue_open, 32.)
                                 .clicked()
                             {
-                                self.queue_open = !self.queue_open;
+                                if self.now_playing.open {
+                                    self.close_now_playing(ctx);
+                                    self.queue_open = true;
+                                } else {
+                                    self.queue_open = !self.queue_open;
+                                }
                             }
                             if let Some(track) = self.queue.current() {
                                 let more = icon_button(
@@ -1879,6 +1905,9 @@ impl App {
                                     28.,
                                 );
                                 egui::Popup::menu(&more).show(|ui| {
+                                    if ui.button("Now Playing · L").clicked() { now_playing = true; ui.close(); }
+                                    if ui.button("Mini player").clicked() { mini_player = true; ui.close(); }
+                                    ui.separator();
                                     if width < 900. {
                                         ui.horizontal(|ui| {
                                             ui.label("Favorite");
@@ -1940,6 +1969,12 @@ impl App {
                     self.visualizer.mode.label()
                 ));
             });
+        if now_playing {
+            self.open_now_playing(ctx);
+        }
+        if mini_player {
+            self.dispatch(crate::actions::Action::MiniPlayer, ctx);
+        }
         if output_settings {
             self.settings_section = SettingsSection::Playback;
             self.navigate(Page::Settings);
@@ -2357,8 +2392,17 @@ impl App {
             Page::Radio(seed) => {
                 surfaces::page_title(ui, &seed.title());
                 ui.label(
-                    RichText::new("Radio selected by TIDAL · Starts automatically").color(MUTED),
+                    RichText::new("TIDAL track / artist radio · Refresh updates this view, not the playing queue").color(MUTED),
                 );
+                if ui
+                    .add_enabled(
+                        !self.loading && !self.tracks.is_empty(),
+                        egui::Button::new("Save loaded radio as playlist…"),
+                    )
+                    .clicked()
+                {
+                    self.open_radio_export();
+                }
             }
             Page::Library(_) | Page::Playlists => {
                 surfaces::page_title(ui, "Your library");
@@ -2986,12 +3030,29 @@ impl eframe::App for App {
                 }
             }
         }
+        #[cfg(debug_assertions)]
+        if ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("fixture_mini")))
+            .unwrap_or(false)
+        {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(PANEL).inner_margin(16))
+                .show(ctx, |ui| self.mini_contents(ui));
+            return;
+        }
         self.link_events(ctx);
         self.events();
         self.state_events();
+        self.tray_tick(ctx);
         self.desktop_events(ctx);
+        self.lyrics_tick();
+        let background_close = self.background_close(ctx);
         self.credential_close_guard(ctx);
-        if ctx.input(|input| input.viewport().close_requested()) {
+        if self.credential_close_pending() && ctx.input(|input| input.viewport().close_requested())
+        {
+            self.quitting = false;
+        }
+        if !background_close && ctx.input(|input| input.viewport().close_requested()) {
             self.cancel_folder_edit();
             self.cancel_delete_playlist();
             self.cancel_reorder();
@@ -3001,7 +3062,14 @@ impl eframe::App for App {
             self.album_load = None;
             self.stop_favorite_cache("Saved-status check stopped.");
         }
+        if self.now_playing.open
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.close_now_playing(ctx);
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
+            self.close_now_playing(ctx);
             if self.page != Page::Search {
                 self.navigate(Page::Search);
             }
@@ -3014,6 +3082,9 @@ impl eframe::App for App {
             self.history(true);
         }
         if !ctx.wants_keyboard_input() {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::L)) {
+                self.open_now_playing(ctx);
+            }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
                 self.toggle();
             }
@@ -3025,36 +3096,40 @@ impl eframe::App for App {
             }
         }
         self.player_bar(ctx);
-        self.sidebar(ctx);
-        self.queue_panel(ctx);
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(
-                if ctx.content_rect().width() < 1100. {
-                    16
-                } else {
-                    24
-                },
-            ))
-            .show(ctx, |ui| {
-                self.toolbar(ui);
-                let generation = self.generation;
-                let mut scroll = egui::ScrollArea::vertical().id_salt((
-                    "content",
-                    self.account,
-                    &self.page,
-                    &self.search_query,
-                ));
-                if let Some(offset) = self.browse_cache.pending_scroll.take() {
-                    scroll = scroll.vertical_scroll_offset(offset);
-                }
-                let output = scroll.show(ui, |ui| {
-                    self.content(ui);
+        if self.now_playing.open {
+            self.now_playing_view(ctx);
+        } else {
+            self.sidebar(ctx);
+            self.queue_panel(ctx);
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(BG).inner_margin(
+                    if ctx.content_rect().width() < 1100. {
+                        16
+                    } else {
+                        24
+                    },
+                ))
+                .show(ctx, |ui| {
+                    self.toolbar(ui);
+                    let generation = self.generation;
+                    let mut scroll = egui::ScrollArea::vertical().id_salt((
+                        "content",
+                        self.account,
+                        &self.page,
+                        &self.search_query,
+                    ));
+                    if let Some(offset) = self.browse_cache.pending_scroll.take() {
+                        scroll = scroll.vertical_scroll_offset(offset);
+                    }
+                    let output = scroll.show(ui, |ui| {
+                        self.content(ui);
+                    });
+                    // Navigation inside content has already restored the next view.
+                    if generation == self.generation {
+                        self.browse_cache.scroll = output.state.offset.y;
+                    }
                 });
-                // Navigation inside content has already restored the next view.
-                if generation == self.generation {
-                    self.browse_cache.scroll = output.state.offset.y;
-                }
-            });
+        }
         self.lossless_sign_in(ctx);
         self.playlist_windows(ctx);
         self.metadata_window(ctx);
@@ -3065,6 +3140,7 @@ impl eframe::App for App {
         self.handle_track_paste(ctx);
         self.prefetch_audio();
         self.prefetch_context();
+        self.radio_tick();
         self.export_tick();
         self.playlist_load_tick();
         self.library_load_tick();
@@ -3072,6 +3148,7 @@ impl eframe::App for App {
         self.album_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
+        self.mini_window(ctx);
         if let Some(deadline) = self.appearance_save {
             let now = std::time::Instant::now();
             if now >= deadline && !ctx.input(|input| input.pointer.any_down()) {
@@ -3237,6 +3314,24 @@ fn track_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<TrackAction>)
         ui.close();
     }
     ui.separator();
+    if ui.button("Browse track radio").clicked() {
+        *radio = Some(TrackAction::BrowseRadio(RadioSeed::Track {
+            id: track.id,
+            title: track.title.clone(),
+        }));
+        ui.close();
+    }
+    if track.artist.id != 0
+        && ui
+            .button(format!("Browse artist radio · {}", track.artist.name))
+            .clicked()
+    {
+        *radio = Some(TrackAction::BrowseRadio(RadioSeed::Artist {
+            id: track.artist.id,
+            name: track.artist.name.clone(),
+        }));
+        ui.close();
+    }
     if ui.button("Start track radio").clicked() {
         *radio = Some(TrackAction::Radio(RadioSeed::Track {
             id: track.id,

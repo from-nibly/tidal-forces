@@ -38,7 +38,28 @@ The graphical player requires a desktop session D-Bus for single-instance
 activation and system media controls. The executable is
 not fully static and does not depend on a Nix store closure.
 
-## P4 audio bundle (v0.31)
+## P5 daily-use surfaces (v0.32)
+
+Version **0.32.0** adds artwork-click/L
+Now Playing with TIDAL-only timed/plain lyrics, a branded native mini player,
+shared CLI controls, an opt-in tray and bounded recommendation continuation.
+Esc restores the previous browsing state. Unsupported RTL/font coverage is
+reported rather than misrendered; no external lyrics service is contacted.
+
+The mini window and all controls share one queue/audio/history owner. Tray and
+recommendation continuation default off. Close-to-tray requires a registered X11
+host; native Wayland keeps Close-as-exit and does not offer always-on-top control.
+CLI commands require an existing compatible instance and acknowledge queuing only.
+Recommendations are capped at three lookups / 150 new tracks per source/session or
+explicit re-enable, preserve manual/source priority and never restart stopped
+playback. Browse/refresh radio does not alter playback; saving a loaded radio view
+opens the existing explicitly confirmed playlist-export flow.
+
+Contracts: [lyrics](docs/lyrics.md), [windows/tray/CLI](docs/daily-use.md),
+[radio and recommendations](docs/recommendations.md). Native review is approved.
+Additional live account/hardware validation remains separately gated.
+
+## Audio settings (v0.31 foundation, v0.32 routing update)
 
 Playback settings now include a native Linux output picker and optional EQ,
 preamp, stereo balance/mono and track/album normalization. Click the player-bar
@@ -46,14 +67,13 @@ quality label to open them. Processing defaults off; unavailable gain metadata
 is never replaced with an invented value. Small windows use a compact settings
 selector and scrollable controls.
 
-Choose an output once in Playback settings before first playback, including when
-upgrading an older preferences file. Selecting it does not start playback.
-Named native outputs are checked against device/port identity. Outputs without
-stable identity require re-selection on the next launch. Output loss or identity
-changes pause playback and require an explicit retry. Compatibility output is a
-separate explicit choice without physical-route protection. Port notifications
-cannot promise zero buffered sound after unplugging; actual hardware validation
-remains opt-in.
+In v0.32, PulseAudio/PipeWire controls routing and fallback. System default is the
+initial preference; the native picker moves only this app's stream, not the
+system-wide default. There is no sink pinning, identity/port protection or pause
+on route-change notifications. Headphone removal may route audio to speakers,
+according to OS policy. Selecting output never starts stopped playback. Actual
+stream failures still require explicit retry. Compatibility mode remains separate;
+switching that backend pauses playback. Actual hardware validation remains opt-in.
 
 Matching FLAC can retain continuous handoffs with bypass or matching stateless
 processing. Stateful EQ, changing normalization, mixed formats and unverified AAC
@@ -145,11 +165,13 @@ bypass, DRM bypass, third-party music proxies or external decoder processes are 
   and right-click menus, including search, album, playlist, mix and discovery
   track lists. The current-player **...** menu/cover and queue right-click menus
   offer the same actions. Artist search results offer **Start artist radio**.
-  These load TIDAL-generated radio tracks and start playback; unavailable radios
-  report an error rather than substituting a locally invented playlist.
+  Start actions load TIDAL-generated radio tracks and start playback; Browse actions
+  leave playback unchanged. Unavailable radios report an error rather than
+  substituting a locally invented playlist.
 - Pause, seek, volume, next/previous, reversible source shuffle and repeat
   **off / source / track** are supported. Repeat-track honors natural completion;
-  pressing Next still advances. Closing the window exits and flushes playback state.
+  pressing Next still advances. Closing the main window exits and flushes playback
+  state unless supported X11 close-to-tray has been explicitly enabled.
 
 Collections paginate beyond 100 tracks via **Load more tracks**. Folder contents
 and mix tracks are fully paginated. Search returns up to 50 results per type.
@@ -187,8 +209,9 @@ pages as they load; it does not claim an unbiased initial choice across unloaded
 pages. Filter/sort, selection and metadata-edit tools remain P3 work.
 
 The [implementation roadmap](docs/feature-plan.md) remains staged. Native visual
-review comes before library/playlist power tools. Lyrics/Now Playing, mini player,
-advanced audio tools and Google Cast remain pending. Genuine TIDAL
+review preceded the library/playlist power tools and P4 audio bundle. P5
+lyrics/Now Playing and mini/tray controls are now in development; Google Cast
+remains pending. Genuine TIDAL
 Connect remains separately gated; there is no network discovery or laptop receiver
 enabled.
 
@@ -252,7 +275,7 @@ Missing or failed output no longer requires restarting the app. Playback pauses,
 preserves its occurrence/position, and requires explicit Play after choosing the
 desired system output. The app does not search other devices on open failure.
 This does **not** detect a healthy virtual endpoint being rerouted by the OS;
-physical-device selection/headphone-loss protection remain separate work.
+routing and headphone-loss behavior are deliberately left to OS policy in v0.32.
 See [output validation](docs/output-validation.md). Approved after native review.
 
 ## Prepared-next playback (v0.29.0)
@@ -805,8 +828,9 @@ Andersson, under SIL OFL (`assets/fonts/OFL.txt`). No Spotifast source or artwor
 is bundled.
 
 Not yet included: nested-folder creation, folder deletion, playlist-cover editing,
-lyrics, offline audio downloads, TIDAL Connect, infinite radio, gapless track
-transitions, tray icon or built-in updater.
+offline audio downloads, TIDAL Connect, infinite radio, universal gapless track
+transitions or a built-in updater. P5 lyrics/tray surfaces remain development-only
+until v0.32 review and approval.
 
 The Rust application is MIT licensed; the bundled AAC codec and fonts retain
 their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md), run `--licenses` for the

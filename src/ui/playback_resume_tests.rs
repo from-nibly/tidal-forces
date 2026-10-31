@@ -48,7 +48,7 @@ fn long_pause_refreshes_same_occurrence_at_position_and_ignores_old_end() {
     let new = app.play_generation;
     assert_ne!(old, new);
     assert!(
-        matches!(requests.try_recv(), Ok(Request::Play { generation, id: 1, position: 42, .. }) if generation == new)
+        matches!(requests.try_recv(), Ok(Request::Play { generation, id: 1, position, .. }) if position == Duration::from_secs(42) && generation == new)
     );
     assert!(app.buffering && !app.paused && app.actual_quality.is_empty());
     assert_eq!(app.queue.current_entry().unwrap().occurrence, occurrence);
@@ -110,9 +110,9 @@ fn premature_end_retries_at_position_without_advancing_or_automatic_retry() {
         requests.try_recv(),
         Ok(Request::Play {
             id: 1,
-            position: 42,
+            position,
             ..
-        })
+        }) if position == Duration::from_secs(42)
     ));
     events
         .send(Event::PlaybackError {
@@ -145,8 +145,8 @@ fn natural_end_still_advances_the_queue() {
         requests.try_recv(),
         Ok(Request::Play {
             id: 2,
-            position: 0,
+            position,
             ..
-        })
+        }) if position == Duration::ZERO
     ));
 }

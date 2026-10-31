@@ -3,34 +3,158 @@ use rodio::Source;
 use std::sync::atomic::AtomicUsize;
 
 #[test]
-fn route_changes_are_fail_closed_without_inventing_port_visibility() {
-    let route = Route {
-        name: "fixture_a".into(),
-        index: 7,
-        port: Some("headphones".into()),
-        available: true,
-        identity: "fixture-identity".into(),
-        label: "Fixture".into(),
-    };
-    assert!(route.same_route(&route));
-    let mut next = route.clone();
-    next.label = "Renamed".into();
-    assert!(route.same_route(&next));
-    let mut next = route.clone();
-    next.port = Some("speaker".into());
-    assert!(!route.same_route(&next));
-    let mut next = route.clone();
-    next.port = None;
-    assert!(!route.same_route(&next));
-    let mut next = route.clone();
-    next.available = false;
-    assert!(!route.same_route(&next));
-    let mut next = route.clone();
-    next.index = 8;
-    assert!(!route.same_route(&next));
+fn output_names_are_bounded() {
     assert!(!valid_name(""));
     assert!(!valid_name("fixture\0other"));
     assert!(!valid_name(&"a".repeat(513)));
+    assert!(valid_name("fixture_a"));
+}
+
+fn wait_for_sink(connection: &mut Connection, name: &str) {
+    let expected = Rc::new(RefCell::new(None));
+    let reply = expected.clone();
+    let mut operation = connection
+        .context
+        .introspect()
+        .get_sink_info_by_name(name, move |info| {
+            if let ListResult::Item(info) = info {
+                *reply.borrow_mut() = Some(info.index);
+            }
+        });
+    connection.wait(&mut operation).unwrap();
+    let expected = expected.borrow().expect("Private fixture must exist");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let sinks = Rc::new(RefCell::new(Vec::new()));
+        let reply = sinks.clone();
+        let mut operation = connection
+            .context
+            .introspect()
+            .get_sink_input_info_list(move |info| {
+                if let ListResult::Item(info) = info {
+                    reply.borrow_mut().push(info.sink);
+                }
+            });
+        connection.wait(&mut operation).unwrap();
+        if sinks.borrow().as_slice() == [expected] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Application stream did not move to the requested private sink"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+#[ignore = "Only tests/output-pipewire.py may supply the private null graph"]
+fn song_changes_on_private_pipewire() {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    let root = std::path::PathBuf::from(
+        std::env::var("TIDAL_TEST_ISOLATED_PIPEWIRE").expect("Use tests/output-pipewire.py"),
+    );
+    assert_eq!(root.canonicalize().unwrap(), root);
+    assert!(
+        root.starts_with("/tmp")
+            && root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tidal-pipewire-test-")
+    );
+    assert_eq!(root.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        root.metadata().unwrap().uid(),
+        std::fs::metadata("/proc/self").unwrap().uid()
+    );
+    assert!(
+        std::fs::symlink_metadata(root.join("native"))
+            .unwrap()
+            .file_type()
+            .is_socket()
+    );
+    assert_eq!(
+        std::env::var("PULSE_SERVER").unwrap(),
+        format!("unix:{}/native", root.display())
+    );
+    assert_eq!(
+        std::env::var("PIPEWIRE_RUNTIME_DIR").unwrap(),
+        root.to_str().unwrap()
+    );
+    for (file, expected) in [
+        (
+            "pipewire.conf",
+            include_str!("../tests/fixtures/pipewire-null.conf"),
+        ),
+        (
+            "pipewire-pulse.conf",
+            include_str!("../tests/fixtures/pipewire-pulse-null.conf"),
+        ),
+        (
+            "wp/wireplumber.conf.d/99-policy.conf",
+            include_str!("../tests/fixtures/wireplumber-policy-only.conf"),
+        ),
+    ] {
+        assert_eq!(std::fs::read_to_string(root.join(file)).unwrap(), expected);
+    }
+    let targets = devices().unwrap();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.iter().all(|device| matches!(&device.target,Target::Pulse(name,_) if name=="fixture_a" || name=="fixture_b")));
+    crate::audio::Player::verify_private_native_continuity();
+    let mut admin = Connection::new().unwrap();
+    assert_eq!(admin.default_sink().unwrap(), "fixture_a");
+    let mut output = crate::audio_output::Output::default();
+    output.select(Target::SystemDefault);
+    // Sustained consumption matters: short reset tests can miss a stalled writer.
+    output.reset(0.65).unwrap();
+    let consumed = Arc::new(AtomicUsize::new(0));
+    let counter = consumed.clone();
+    output.append(
+        rodio::buffer::SamplesBuffer::new(2, 48000, vec![0.25; 48000 * 2 * 6]).periodic_access(
+            Duration::from_millis(10),
+            move |_| {
+                if counter.fetch_add(1, Ordering::AcqRel) == 50 {
+                    // Test-only scheduling stall: the server must resume real samples afterward.
+                    thread::sleep(Duration::from_millis(250));
+                }
+            },
+        ),
+    );
+    output.pause(false);
+    for second in 0..5 {
+        let before = consumed.load(Ordering::Acquire);
+        thread::sleep(Duration::from_secs(1));
+        output.sync_pause();
+        assert!(!output.failed());
+        assert!(
+            consumed.load(Ordering::Acquire) > before + 50,
+            "Native writer stalled during second {second}"
+        );
+    }
+    for change in 0..30 {
+        output.reset(0.65).unwrap();
+        output.append(rodio::source::Zero::new(2, 48000));
+        output.pause(false);
+        let target = &targets[change % targets.len()].target;
+        output.select(target.clone());
+        if let Target::Pulse(name, _) = target {
+            wait_for_sink(&mut admin, name);
+        }
+        thread::sleep(Duration::from_millis(100));
+        assert!(!output.selection_failed());
+        assert_eq!(
+            admin.default_sink().unwrap(),
+            "fixture_a",
+            "Changing this app must not change the server default"
+        );
+        assert!(
+            !output.failed(),
+            "Unchanged virtual PipeWire route failed after song change {change}"
+        );
+        output.stop();
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -125,16 +249,26 @@ fn native_routing_on_private_null_server() {
                 &Target::Pulse(name.clone(), "wrong-identity".into()),
                 Arc::new(AtomicBool::new(false))
             )
-            .is_err(),
-            "An existing sink with a different saved identity must not open"
+            .is_ok(),
+            "Legacy fingerprints must not pin or reject an OS output"
         );
+    }
+    {
+        let mut output = crate::audio_output::Output::default();
+        output.select(target_a.clone());
+        for _ in 0..40 {
+            output.reset(0.65).unwrap();
+            output.append(rodio::source::Zero::new(2, 48000));
+            output.pause(false);
+            thread::sleep(Duration::from_millis(30));
+            assert!(
+                !output.failed(),
+                "Changing sources must not fault an unchanged private output"
+            );
+        }
     }
     let failed = Arc::new(AtomicBool::new(false));
     let driver = Driver::open(&target_a, failed.clone()).unwrap();
-    assert!(
-        !driver.port_observed,
-        "Null sinks are not physical headphone evidence"
-    );
     let rendered = Arc::new(AtomicUsize::new(0));
     let counter = rendered.clone();
     let sink = rodio::Sink::connect_new(&driver.mixer);
@@ -174,6 +308,22 @@ fn native_routing_on_private_null_server() {
             }
         });
     admin.wait(&mut operation).unwrap();
+    driver.select(target_b.clone());
+    wait_for_sink(&mut admin, "fixture_b");
+    driver.select(Target::SystemDefault);
+    wait_for_sink(&mut admin, "fixture_a");
+    assert_eq!(admin.default_sink().unwrap(), "fixture_a");
+    driver.select(Target::Pulse("missing_fixture".into(), String::new()));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !driver.selection_failed.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    wait_for_sink(&mut admin, "fixture_a");
+    assert!(
+        !failed.load(Ordering::Acquire),
+        "A rejected selection must not terminate the existing stream"
+    );
     let moved = Rc::new(RefCell::new(None));
     let result = moved.clone();
     let mut operation = admin.context.introspect().move_sink_input_by_name(
@@ -184,8 +334,8 @@ fn native_routing_on_private_null_server() {
     admin.wait(&mut operation).unwrap();
     assert_eq!(
         *moved.borrow(),
-        Some(false),
-        "The server must honor DONT_MOVE"
+        Some(true),
+        "The OS must be allowed to move the application stream"
     );
     assert!(!failed.load(Ordering::Acquire));
     let module = Rc::new(RefCell::new(None));
@@ -210,18 +360,18 @@ fn native_routing_on_private_null_server() {
         });
     admin.wait(&mut operation).unwrap();
     assert!(*removed.borrow());
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !failed.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(5));
-    }
+    thread::sleep(Duration::from_millis(150));
+    assert!(
+        !failed.load(Ordering::Acquire),
+        "Removing the old sink must not fault the OS-moved stream"
+    );
     drop(driver);
     let stopped = rendered.load(Ordering::Acquire);
     thread::sleep(Duration::from_millis(50));
     assert_eq!(rendered.load(Ordering::Acquire), stopped);
     assert!(
         Driver::open(&target_a, Arc::new(AtomicBool::new(false))).is_err(),
-        "A missing selected sink must not fall back to fixture_b"
+        "The server may reject an unavailable explicitly requested output"
     );
     let retry = Driver::open(&target_b, Arc::new(AtomicBool::new(false))).unwrap();
     drop(retry);

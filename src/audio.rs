@@ -150,7 +150,7 @@ impl NextOutput<'_> {
             && request.boundary.preparing()
             && self.generation.load(Ordering::Acquire) == request.key.generation
         {
-            let frame = Frame::new(request.boundary.to, &pcm, feedback, 0);
+            let frame = Frame::new(request.boundary.to, &pcm, feedback, Duration::ZERO);
             let prepared = Arc::new(Prepared {
                 quality: session.quality.clone(),
                 loaded: Mutex::new(Some(session)),
@@ -182,7 +182,7 @@ enum Command {
         crate::pcm::PcmSource,
         String,
         crate::pcm::Feedback,
-        u64,
+        Duration,
     ),
     Prepare(
         NextRequest,
@@ -235,6 +235,46 @@ impl Player {
     }
 
     #[cfg(test)]
+    pub(crate) fn verify_private_native_continuity() {
+        // Caller must first validate the isolated, null-only server contract.
+        assert!(std::env::var_os("TIDAL_TEST_ISOLATED_PIPEWIRE").is_some());
+        let (tx, rx) = mpsc::channel();
+        let player = Self::new(Events::fixture(tx));
+        let id = player.reserve();
+        let source = rodio::buffer::SamplesBuffer::new(2, 44100, vec![0.25; 44100 * 2 * 7]);
+        let (pcm, feedback) = player.pcm.start(Box::new(source)).unwrap();
+        player
+            .tx
+            .send(Command::Load(
+                id,
+                pcm,
+                "Synthetic PCM".into(),
+                feedback,
+                Duration::ZERO,
+            ))
+            .unwrap();
+        player.pause(false);
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        let mut last_position = Duration::ZERO;
+        loop {
+            match rx
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .unwrap_or_else(|e| {
+                    panic!("Native PCM playback stopped advancing at {last_position:?}: {e}")
+                }) {
+                Event::Position {
+                    generation,
+                    position,
+                } if generation == id && position >= Duration::from_secs(3) => break,
+                Event::Position { position, .. } => last_position = position,
+                Event::OutputLost { .. } => panic!("Private native PCM output failed"),
+                _ => {}
+            }
+        }
+        player.reserve();
+    }
+
+    #[cfg(test)]
     pub(crate) fn seed_buffered_fixture(&self) {
         let (decoder, lease) = crate::audio_buffer::Reusable::new(Box::new(
             rodio::buffer::SamplesBuffer::new(1, 1000, vec![0.25; 2000]),
@@ -261,7 +301,12 @@ impl Player {
                 vec![0.; 2],
             )))
             .unwrap();
-        let previous = Frame::new(request.key.generation, &previous_pcm, feedback, 0);
+        let previous = Frame::new(
+            request.key.generation,
+            &previous_pcm,
+            feedback,
+            Duration::ZERO,
+        );
         previous
             .rendered
             .store(request.key.duration * 1_000_000_000, Ordering::Release);
@@ -269,7 +314,7 @@ impl Player {
             rodio::buffer::SamplesBuffer::new(1, 1000, vec![0.75; 2000]),
         ));
         let (pcm, feedback) = self.pcm.start(Box::new(lease)).unwrap();
-        let frame = Frame::new(request.boundary.to, &pcm, feedback, 0);
+        let frame = Frame::new(request.boundary.to, &pcm, feedback, Duration::ZERO);
         let loaded = Loaded {
             generation: request.boundary.to,
             decoder,
@@ -319,6 +364,7 @@ impl Player {
             let mut slot = Slot::default();
             let mut reported_buffering = false;
             let mut reported = Duration::ZERO;
+            let mut reported_position = None;
             loop {
                 let command = rx.recv_timeout(Duration::from_millis(100));
                 if pending
@@ -332,6 +378,9 @@ impl Player {
                         reported_buffering = false;
                         events.send(Event::Transition(transition.generation));
                     }
+                }
+                if output.selection_failed() {
+                    events.send(Event::OutputSelectionFailed);
                 }
                 if output.failed() {
                     // Close/join the output before resolving its last possible claim.
@@ -403,7 +452,7 @@ impl Player {
                             feedback.cancel();
                             events.send(Event::OutputLost {
                                 generation: id,
-                                position: Some(start),
+                                position: Some(start.as_secs()),
                                 epoch: recovery.epoch(),
                             });
                             continue;
@@ -550,15 +599,19 @@ impl Player {
                         capture.playing(false);
                         events.send(Event::Position {
                             generation: id,
-                            seconds: frame.position(),
+                            position: frame.position_time(),
                         });
                         active = None;
                         events.send(Event::Ended(id));
-                    } else if !output.sink.is_paused() {
-                        events.send(Event::Position {
-                            generation: id,
-                            seconds: frame.position(),
-                        });
+                    } else {
+                        let position = frame.position_time();
+                        if reported_position != Some((id, position)) {
+                            events.send(Event::Position {
+                                generation: id,
+                                position,
+                            });
+                            reported_position = Some((id, position));
+                        }
                     }
                 }
             }
@@ -677,7 +730,7 @@ impl Player {
             stream.codec.eq_ignore_ascii_case("flac"),
             "Continuous AAC transitions await priming/padding validation"
         );
-        let (loaded, lease) = open_stream(request.boundary.to, stream, 0).await?;
+        let (loaded, lease) = open_stream(request.boundary.to, stream, Duration::ZERO).await?;
         let previous = self
             .loaded
             .lock()
@@ -724,7 +777,7 @@ impl Player {
     }
 
     // Cached seeks must not queue behind slow catalog/account HTTP requests.
-    pub fn dispatch_seek(&self, generation: u64, position: u64) -> bool {
+    pub fn dispatch_seek(&self, generation: u64, position: Duration) -> bool {
         let Some((runtime, events)) = self.seek_runtime.get() else {
             return false;
         };
@@ -763,7 +816,7 @@ impl Player {
         Some(id)
     }
 
-    pub async fn seek_buffered(&self, id: u64, position: u64) -> Result<()> {
+    pub async fn seek_buffered(&self, id: u64, position: Duration) -> Result<()> {
         let _preparing = self.preparing.acquire().await?;
         if !self.current(id) {
             return Ok(());
@@ -785,7 +838,7 @@ impl Player {
         let player = self.clone();
         let lease = tokio::task::spawn_blocking(move || {
             let mut lease = decoder.acquire(|| player.current(id))?;
-            lease.try_seek(Duration::from_secs(position)).map_err(|_| anyhow::anyhow!(
+            lease.try_seek(position).map_err(|_| anyhow::anyhow!(
                 "Could not seek using the temporary audio buffer. Press play to refresh the stream at this position."
             ))?;
             Ok::<_, anyhow::Error>(lease)
@@ -841,7 +894,7 @@ impl Player {
         let _ = self.tx.send(Command::Volume(volume));
     }
 
-    pub async fn load(&self, id: u64, stream: Stream, position: u64) -> Result<()> {
+    pub async fn load(&self, id: u64, stream: Stream, position: Duration) -> Result<()> {
         let _preparing = self.preparing.acquire().await?;
         if !self.current(id) {
             return Ok(());
@@ -875,7 +928,7 @@ impl Player {
 async fn open_stream(
     id: u64,
     stream: Stream,
-    position: u64,
+    position: Duration,
 ) -> Result<(Loaded, crate::audio_buffer::Lease)> {
     let quality = stream.label();
     let flac = stream.codec.eq_ignore_ascii_case("flac");
@@ -924,17 +977,16 @@ async fn open_stream(
 async fn prepare_start(
     mut decoder: Box<dyn Source<Item = f32> + Send>,
     seeker: Option<crate::dash::SeekHandle>,
-    position: u64,
+    position: Duration,
 ) -> Result<(
     Box<dyn Source<Item = f32> + Send>,
     Option<crate::dash::SeekHandle>,
 )> {
-    if position == 0 {
+    if position.is_zero() {
         return Ok((decoder, seeker));
     }
     // Resolve the saved position before the decoder ever reaches the mixer.
     tokio::task::spawn_blocking(move || {
-        let position = Duration::from_secs(position);
         if let Some(seeker) = &seeker {
             seeker.prepare(position)?;
         }
@@ -1017,7 +1069,11 @@ mod resume_tests {
             .decoder
             .clone();
         let weak = Arc::downgrade(&original);
-        for (expected, position, samples) in [(0, 1, 1000), (1, 0, 2000)] {
+        for (expected, position, samples) in [
+            (0, Duration::from_secs(1), 1000),
+            (1, Duration::from_millis(1250), 750),
+            (2, Duration::ZERO, 2000),
+        ] {
             let id = player.reserve_seek(expected).unwrap();
             assert!(matches!(rx.recv().unwrap(), Command::Stop));
             assert!(
@@ -1043,7 +1099,10 @@ mod resume_tests {
             weak.upgrade().is_none(),
             "Stopped/account-replaced song must be discarded"
         );
-        player.seek_buffered(2, 1).await.unwrap();
+        player
+            .seek_buffered(2, Duration::from_secs(1))
+            .await
+            .unwrap();
         assert!(rx.try_recv().is_err(), "Stale seek must not publish audio");
     }
 
@@ -1067,7 +1126,9 @@ mod resume_tests {
     async fn saved_position_is_prepared_before_append_and_sink_waits_for_explicit_play() {
         let samples: Vec<f32> = (0..1000).map(|index| index as f32 / 1000.).collect();
         let source = rodio::buffer::SamplesBuffer::new(1, 100, samples);
-        let (source, _) = prepare_start(Box::new(source), None, 3).await.unwrap();
+        let (source, _) = prepare_start(Box::new(source), None, Duration::from_secs(3))
+            .await
+            .unwrap();
         let (sink, mut output) = Sink::new();
         sink.pause();
         sink.append(source);
@@ -1110,6 +1171,10 @@ mod resume_tests {
                 None
             }
         }
-        assert!(prepare_start(Box::new(Unseekable), None, 5).await.is_err());
+        assert!(
+            prepare_start(Box::new(Unseekable), None, Duration::from_secs(5))
+                .await
+                .is_err()
+        );
     }
 }

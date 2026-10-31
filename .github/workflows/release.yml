@@ -47,6 +47,8 @@ jobs:
         run: python3 tests/output-recovery.py
       - name: Isolated native routing and cancellation contract
         run: python3 tests/output-pulse.py
+      - name: Isolated native tray and window-close contract
+        run: python3 tests/tray.py
       - name: Build the single executable
         run: cargo build --locked --release
       - name: Verify release executable

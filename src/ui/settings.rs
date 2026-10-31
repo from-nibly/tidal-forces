@@ -74,7 +74,24 @@ impl App {
                     self.send(Request::BeginPkce);
                 }
                 ui.add_space(16.);
-                ui.label("Closing the window exits the player. Your queue, position, volume and last page restore paused on the next launch.");
+                surfaces::section_title(ui, "Recommendation continuation");
+                self.radio_controls(ui);
+                ui.add_space(16.);
+                surfaces::section_title(ui, "Windows & background playback");
+                if ui.button("Open mini player").clicked() { self.dispatch(crate::actions::Action::MiniPlayer, ui.ctx()); }
+                if ui.add_enabled(cfg!(target_os = "linux"), egui::Checkbox::new(&mut self.appearance.tray_enabled, "Enable desktop tray controls (close-to-tray on X11)")).changed() {
+                    self.save_appearance(); ui.ctx().request_repaint();
+                }
+                if self.appearance.tray_enabled {
+                    ui.label(match self.tray.as_ref().map(crate::tray::Tray::status) {
+                        Some(crate::tray::Status::Ready) if super::mini::wayland() => "Tray registered. This native Wayland backend cannot reliably hide and restore windows, so Close still exits. Focus requests follow compositor policy.",
+                        Some(crate::tray::Status::Ready) => "Tray registered. Close hides the main window; Quit still exits with credential safety checks.",
+                        Some(crate::tray::Status::Starting) => "Connecting to the desktop tray. Until registered, closing still exits.",
+                        _ => "No supported tray host is registered. Closing still exits; toggle this setting to retry a failed connection.",
+                    });
+                } else { ui.label("Closing the main window exits the player. Tray/background playback is off by default."); }
+                ui.label("Closing only the mini player leaves playback unchanged. If an active tray disappears, a hidden main window is restored.");
+                ui.label("Your queue, position, volume and last page restore paused on the next launch.");
                 ui.label("Saved playback is private to each TIDAL account. Press Play to resolve a fresh authorized stream; saved audio URLs are never reused.");
                 ui.label("TIDAL links open in this instance. System media keys use your existing MPRIS routing.");
             }
@@ -184,6 +201,7 @@ impl App {
                 surfaces::section_title(ui, "Keyboard & media controls");
                 for (key, action) in [
                     ("Space", "Play / pause when not editing"),
+                    ("L / Esc", "Open Now Playing / return to browsing"),
                     ("Ctrl+K", "Search music or open a TIDAL link"),
                     (
                         "Alt+Left / Right",
@@ -226,7 +244,7 @@ impl App {
                 crate::output_devices::DEFAULT_LABEL.to_owned()
             }
             crate::output_devices::Target::CompatibilityDefault => {
-                "Compatibility default · no physical route guard".to_owned()
+                "Compatibility default · OS-managed routing".to_owned()
             }
             _ => catalog
                 .devices
@@ -256,7 +274,7 @@ impl App {
                 ui.selectable_value(
                     &mut self.appearance.output,
                     crate::output_devices::Target::CompatibilityDefault,
-                    "Compatibility default · no physical route guard",
+                    "Compatibility default · OS-managed routing",
                 );
             });
         if ui
@@ -276,12 +294,27 @@ impl App {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
         ui.label(RichText::new(&self.output_details).color(MUTED));
-        ui.label(RichText::new("Changing output pauses playback; press Play to continue. A missing saved device never selects another device. Physical route notifications cannot promise zero buffered sound after unplugging.").color(MUTED));
+        ui.label(RichText::new("The audio server controls routing and fallback, including speakers when headphones disconnect. Native output changes move only this app’s stream, not the system default. Switching compatibility mode pauses playback.").color(MUTED));
         if before != self.appearance.output {
             self.sync_next(true);
             self.next_attempt = None;
-            if !self.paused {
-                self.toggle();
+            if matches!(before, crate::output_devices::Target::CompatibilityDefault)
+                || matches!(
+                    self.appearance.output,
+                    crate::output_devices::Target::CompatibilityDefault
+                )
+            {
+                let position = self.position_time();
+                self.play_generation = self.backend.player.reserve();
+                self.position_clock.target(
+                    self.play_generation,
+                    position,
+                    std::time::Instant::now(),
+                );
+                self.paused = true;
+                self.buffering = false;
+                self.ended = false;
+                self.actual_quality.clear();
             }
             self.backend
                 .player

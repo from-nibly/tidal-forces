@@ -48,7 +48,7 @@ fn restore_position_and_stale_events_cannot_fabricate_history_or_cross_accounts(
     events
         .send(Event::Position {
             generation: 4,
-            seconds: 179,
+            position: std::time::Duration::from_secs(179),
         })
         .unwrap();
     events

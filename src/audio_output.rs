@@ -5,7 +5,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-pub const LOST_MESSAGE: &str = "Output lost or changed. Choose an output in Playback settings, then retry here or use Play in the player bar. No automatic restart.";
+pub const LOST_MESSAGE: &str = "The audio stream failed. Check your OS audio settings, then retry or use Play. No automatic restart.";
 
 #[derive(Default)]
 pub struct Recovery {
@@ -65,30 +65,32 @@ impl Default for Output {
 impl Output {
     pub fn select(&mut self, target: crate::output_devices::Target) {
         if self.target != target {
-            self.target = target;
-            if self.stream.is_some() {
-                self.failed.store(true, Ordering::Release);
+            #[cfg(target_os = "linux")]
+            if let Some(Stream::Native(stream)) = &self.stream
+                && matches!(
+                    target,
+                    crate::output_devices::Target::SystemDefault
+                        | crate::output_devices::Target::Pulse(_, _)
+                )
+            {
+                stream.select(target.clone());
+                self.target = target;
+                return;
             }
+            self.target = target;
+            self.close();
         }
     }
     pub fn description(&self) -> String {
         match &self.stream {
             Some(Stream::Compatibility(stream)) => format!(
-                "Compatibility output · {} Hz · {} channels · {:?}. Physical route protection unavailable.",
+                "Compatibility output · {} Hz · {} channels · {:?}. Routing is managed by the OS.",
                 stream.config().sample_rate(),
                 stream.config().channel_count(),
                 stream.config().sample_format()
             ),
             #[cfg(target_os = "linux")]
-            Some(Stream::Native(stream)) => format!(
-                "{} · 48 kHz / 32-bit float / stereo engine · sink lock requested · {}. DAC format and zero-tail unplug behavior are not verified.",
-                stream.label,
-                if stream.port_observed {
-                    "physical port monitored"
-                } else {
-                    "physical port not exposed"
-                }
-            ),
+            Some(Stream::Native(_)) => "OS-managed routing · 48 kHz / 32-bit float / stereo engine. The server may move this stream or choose a fallback; engine format does not prove DAC format.".into(),
             None => "Output closed · choose an output, then use Play to open it.".into(),
         }
     }
@@ -179,6 +181,13 @@ impl Output {
     #[cfg(test)]
     pub fn simulate_failure(&self) {
         self.failed.store(true, Ordering::Release);
+    }
+    pub fn selection_failed(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some(Stream::Native(stream)) = &self.stream {
+            return stream.selection_failed.swap(false, Ordering::AcqRel);
+        }
+        false
     }
     pub fn failed(&self) -> bool {
         self.stream.is_some() && self.failed.load(Ordering::Acquire)

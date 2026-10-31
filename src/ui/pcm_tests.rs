@@ -55,7 +55,7 @@ fn seek_prepares_new_stream_without_changing_queue_or_pause_intent() {
         assert_eq!(app.queue.current_entry().unwrap().occurrence, occurrence);
         assert_eq!(app.queue.revision(), revision);
         assert!(
-            matches!(requests.try_recv(),Ok(Request::Play{id:1,position:45,generation,..}) if generation==app.play_generation && generation!=old)
+            matches!(requests.try_recv(),Ok(Request::Play{id:1,position,generation,..}) if position == std::time::Duration::from_secs(45) && generation==app.play_generation && generation!=old)
         );
         events
             .send(Event::StreamBuffering {
@@ -101,7 +101,7 @@ fn buffered_seek_keeps_occurrence_pause_and_idle_refresh_guards() {
         let old = app.play_generation;
         app.seek(45);
         assert!(
-            matches!(requests.try_recv(), Ok(Request::SeekBuffered { generation, position:45 }) if generation == app.play_generation && generation != old)
+            matches!(requests.try_recv(), Ok(Request::SeekBuffered { generation, position }) if position == std::time::Duration::from_secs(45) && generation == app.play_generation && generation != old)
         );
         assert_eq!(app.paused, paused);
         assert_eq!(app.paused_since, paused_since);
@@ -111,7 +111,7 @@ fn buffered_seek_keeps_occurrence_pause_and_idle_refresh_guards() {
         events
             .send(Event::Position {
                 generation: old,
-                seconds: 10,
+                position: std::time::Duration::from_secs(10),
             })
             .unwrap();
         events

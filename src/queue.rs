@@ -322,6 +322,65 @@ impl Queue {
         Ok(())
     }
 
+    pub fn recommendation_candidates(
+        &self,
+        tracks: Vec<Track>,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        ensure!(
+            self.continuation.is_none(),
+            "Finish loading the source before adding recommendations"
+        );
+        ensure!(
+            tracks.len() <= 100 && limit <= 50,
+            "Recommendation batch limit exceeded"
+        );
+        let mut seen: HashSet<_> = self
+            .context
+            .iter()
+            .chain(self.manual.iter())
+            .chain(self.back.iter())
+            .chain(self.redo.iter())
+            .chain(self.current.iter())
+            .map(|entry| entry.track.id)
+            .collect();
+        Ok(tracks
+            .into_iter()
+            .filter(|track| track.id != 0 && seen.insert(track.id))
+            .take(limit)
+            .collect())
+    }
+
+    pub fn append_recommendations(&mut self, tracks: Vec<Track>, limit: usize) -> Result<usize> {
+        let tracks = self.recommendation_candidates(tracks, limit)?;
+        let count = tracks.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        self.capacity(count)?;
+        let mut tracks = tracks;
+        if self.shuffled {
+            tracks.shuffle(&mut rand::rng());
+        }
+        for track in tracks {
+            let index = self.context.len();
+            let entry = self.entry(track);
+            self.context.push(entry);
+            self.upcoming.push_back(index);
+        }
+        self.changed();
+        const SUFFIX: &str = " · track recommendations";
+        if !self.title.ends_with(SUFFIX) {
+            let mut end = self.title.len().min(4096 - SUFFIX.len());
+            while !self.title.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.title.truncate(end);
+            self.title.push_str(SUFFIX);
+        }
+        Ok(count)
+    }
+
     pub fn toggle_shuffle(&mut self) {
         self.shuffled = !self.shuffled;
         if self.shuffled {

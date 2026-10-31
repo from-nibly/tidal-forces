@@ -1,6 +1,6 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.31.0 approved after combined native review; publication/install underway. P5 implementation is authorized after installation, on a new development branch.**
+**Status: v0.32.0 P5 native review and audio feedback are approved for publication and installation. v0.31.0 remains installed until deployment completes. P6 implementation is authorized after that installation, not P6 publication.**
 
 The operator requested one version for the entire remaining P4 scope, not more
 incremental releases. The bundle includes output selection/preferences and route-loss
@@ -12,7 +12,31 @@ missing normalization or AAC trim metadata is not permission to invent values.
 Native hardware/audible validation still needs separate opt-in. P5 is excluded.
 No part of this bundle is to be published separately before combined native review.
 
-### Approved combined P4 implementation (v0.31.0)
+### Approved P5 release (v0.32.0)
+
+Shared CLI/MPRIS actions and subsecond positions, TIDAL-only lyrics/Now Playing,
+the branded native mini player/opt-in tray, and bounded recommendation continuation
+are implemented and passing local dual-toolchain/release/isolated/native checks.
+Operator native review and version approval are complete. See [lyrics](lyrics.md), [daily-use controls](daily-use.md)
+and [radio/recommendation contracts](recommendations.md). Native Wayland
+cannot reliably hide/restore windows with this backend: tray controls work, but
+Close still exits; close-to-tray is gated to a registered X11 host. Always-on-top
+is likewise unavailable on native Wayland. No compositor-specific workaround,
+third-party lyrics lookup, real account mutation or audible test is authorized.
+
+### v0.32 routing feedback — OS policy replaces app protection
+
+The operator explicitly requested no sink pinning or routing protection. Native
+PulseAudio/PipeWire routing and fallback now belong to the OS. The picker moves
+only this application's stream; ordinary route changes do not pause playback.
+Device/port fingerprints and DONT_MOVE are removed; legacy fingerprints are ignored
+and first-use preferences use system default. Headphone removal may select speakers
+under OS policy. Actual stream failures retain explicit recovery. This supersedes
+the v0.31 routing protections below, not account/revision/queue guards. Isolated
+PulseAudio/PipeWire tests cover song changes and app-only moves; real-device behavior
+remain separately gated; the operator confirmed the native-audio fix in review.
+
+### Approved combined P4 implementation (v0.31.0; historical routing policy)
 
 - Native Linux PulseAudio/PipeWire-client output selection, sink movement refusal,
   port/identity monitoring and explicit-retry recovery. Named preferences include
@@ -1053,9 +1077,10 @@ never add an always-on processing stage to an otherwise bypassed path by acciden
   Do not promise sample-perfect transitions across unsupported conversions.
 - Request source quality independently of output format. A source-format label
   cannot prove the DAC's output format. Provide a details popover for what is known.
-- Output selection/hotplug recovery must not require restarting the app. If
-  headphones/remote output disappear, pause and ask where to resume rather than
-  suddenly playing through speakers. Remember preference, not a stale device handle.
+- Output selection/recovery must not require restarting the app. Per v0.32 operator
+  feedback, defer routing and headphone-loss fallback to the OS; do not pin sinks or
+  stop on routing notifications. Remember a preference, not a stale device handle.
+  Genuine stream failures still require explicit retry.
 - Local EQ/normalization do not affect genuine Connect remote playback. Reflect
   this in settings and disable the local PCM visualizer for remote playback.
 

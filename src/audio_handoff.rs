@@ -122,12 +122,17 @@ pub struct Frame {
     pub feedback: pcm::Feedback,
     pub rendered: Arc<AtomicU64>,
     pub format: (u16, u32),
-    offset: u64,
+    offset: Duration,
     origin: Instant,
     started: AtomicU64,
 }
 impl Frame {
-    pub fn new(id: u64, pcm: &pcm::PcmSource, feedback: pcm::Feedback, offset: u64) -> Arc<Self> {
+    pub fn new(
+        id: u64,
+        pcm: &pcm::PcmSource,
+        feedback: pcm::Feedback,
+        offset: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id,
             feedback,
@@ -147,7 +152,10 @@ impl Frame {
             .saturating_sub(Duration::from_nanos(self.started.load(Ordering::Acquire)))
     }
     pub fn position(&self) -> u64 {
-        self.rendered().as_secs().saturating_add(self.offset)
+        self.position_time().as_secs()
+    }
+    pub fn position_time(&self) -> Duration {
+        self.offset.saturating_add(self.rendered())
     }
 }
 

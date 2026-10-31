@@ -8,15 +8,12 @@ use std::sync::{
 pub enum Target {
     #[default]
     SystemDefault,
+    // Retain the old preference shape; its former identity field is ignored.
     Pulse(String, String),
     CompatibilityDefault,
     RequireSelection,
 }
-pub const DEFAULT_LABEL: &str = if cfg!(target_os = "linux") {
-    "System default · lock when opened"
-} else {
-    "System default · no physical route guard"
-};
+pub const DEFAULT_LABEL: &str = "System default · OS-managed routing";
 
 #[derive(Clone)]
 pub struct Device {

@@ -123,10 +123,23 @@ type Wake = Arc<Mutex<Option<eframe::egui::Context>>>;
 
 struct Inbox {
     tx: mpsc::SyncSender<Option<Link>>,
+    commands: mpsc::SyncSender<crate::actions::Action>,
     wake: Wake,
 }
 #[zbus::dbus_interface(name = "rocks.tidalforces.Player")]
 impl Inbox {
+    fn control(&self, command: &str, value: &str) -> zbus::fdo::Result<()> {
+        let action = crate::actions::Action::parse(command, value)
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
+        self.commands.try_send(action).map_err(|_| {
+            zbus::fdo::Error::LimitsExceeded("The player is busy; try again".into())
+        })?;
+        if let Some(ctx) = self.wake.lock().unwrap().as_ref() {
+            ctx.request_repaint();
+        }
+        Ok(())
+    }
+
     fn open(&self, uri: &str) -> zbus::fdo::Result<()> {
         let link = if uri.is_empty() {
             None
@@ -147,18 +160,31 @@ pub struct Instance {
     // Holding the bus connection owns the name, including while the GUI starts.
     _connection: zbus::blocking::Connection,
     pub events: mpsc::Receiver<Option<Link>>,
+    pub commands: mpsc::Receiver<crate::actions::Action>,
     wake: Wake,
 }
 impl Instance {
+    pub fn control(command: &str, value: &str) -> Result<()> {
+        crate::actions::Action::parse(command, value)?;
+        let connection = zbus::blocking::Connection::session()?;
+        let proxy = zbus::blocking::Proxy::new(&connection, SERVICE, PATH, SERVICE)?;
+        proxy.call::<_, _, ()>("Control", &(command, value)).map_err(|_| {
+            anyhow::anyhow!("Could not queue the command. Open a compatible Tidal Forces player and try again.")
+        })?;
+        Ok(())
+    }
+
     // None means a running player accepted the activation/link.
     pub fn start(uri: Option<&str>) -> Result<Option<Self>> {
         if let Some(uri) = uri {
             Link::parse(uri)?;
         }
         let (tx, events) = mpsc::sync_channel(32);
+        let (commands_tx, commands) = mpsc::sync_channel(32);
         let wake = Arc::new(Mutex::new(None));
         let inbox = Inbox {
             tx,
+            commands: commands_tx,
             wake: wake.clone(),
         };
         let connection = zbus::blocking::ConnectionBuilder::session()?
@@ -169,6 +195,7 @@ impl Instance {
             Ok(connection) => Ok(Some(Self {
                 _connection: connection,
                 events,
+                commands,
                 wake,
             })),
             Err(zbus::Error::NameTaken) => {
@@ -215,6 +242,21 @@ mod tests {
         );
         assert!(Instance::start(Some("tidal://login/auth?code=secret")).is_err());
         assert!(primary.events.try_recv().is_err());
+        Instance::control("seek", "12.345").unwrap();
+        assert_eq!(
+            primary
+                .commands
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            crate::actions::Action::Seek(std::time::Duration::from_millis(12_345))
+        );
+        assert!(Instance::control("volume", "NaN").is_err());
+        assert!(primary.commands.try_recv().is_err());
+        for _ in 0..32 {
+            Instance::control("pause", "").unwrap();
+        }
+        assert!(Instance::control("play", "").is_err());
+        assert_eq!(primary.commands.try_iter().count(), 32);
     }
 
     #[test]
