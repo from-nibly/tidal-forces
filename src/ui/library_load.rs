@@ -79,11 +79,11 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.spinner();
                 ui.label(if kind == FavoriteKind::Tracks { "Loading…".into() } else { format!("Loading saved {}", kind.label().to_lowercase()) }).on_hover_text(format!("{} entries read", self.library_offset));
-                if ui.button("Stop loading").clicked() { self.library_load = None; }
+                if ui.button(tr("Stop loading")).clicked() { self.library_load = None; }
             });
         } else if self.more && ui.add_enabled(self.can_load_library(),
             egui::Button::new(format!("Load all saved {}", kind.label().to_lowercase())))
-            .on_hover_text("Read the remaining saved items, up to 50,000 entries. Does not change playback or favorites. Changes made elsewhere may require Refresh; an in-flight page may finish after stopping.")
+            .on_hover_text(tr("Read the remaining saved items, up to 50,000 entries. Does not change playback or favorites. Changes made elsewhere may require Refresh; an in-flight page may finish after stopping."))
             .clicked() { self.start_library_load(); }
     }
 

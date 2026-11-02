@@ -15,6 +15,12 @@ pub fn print() {
         include_str!("../vendor/libpulse-binding/LICENSE-MIT")
     );
     println!(
+        "\nClassic skin archive reader (zip)\n{}\nTyped archive paths (typed-path, MIT option)\n{}\nUnix archive support (nix)\n{}",
+        include_str!("../assets/licenses/ZIP.txt"),
+        include_str!("../assets/licenses/TYPED-PATH.txt"),
+        include_str!("../assets/licenses/NIX.txt")
+    );
+    println!(
         "Complete bundled FDK source: run --export-fdk-source PATH to extract the original fdk-aac-sys-0.5.0.crate (gzip tar archive). The Rust application source and Cargo.lock are available at https://github.com/from-nibly/tidal-forces."
     );
 }

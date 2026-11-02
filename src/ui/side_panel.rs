@@ -24,11 +24,11 @@ enum Action {
 fn queue_drag_handle(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(28., 38.), egui::Sense::drag());
     let color = if response.hovered() || response.dragged() {
-        ACCENT
+        theme_accent()
     } else {
-        MUTED
+        theme_muted()
     };
-    ui.painter().rect_filled(rect, 4., CARD);
+    ui.painter().rect_filled(rect, 4., theme_card());
     for x in [-3.5, 3.5] {
         for y in [-5., 0., 5.] {
             ui.painter()
@@ -44,7 +44,9 @@ fn queue_drag_handle(ui: &mut egui::Ui) -> egui::Response {
     });
     response
         .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text("Drag this grip to reorder manual Up next. Up/Down buttons also work.")
+        .on_hover_text(tr(
+            "Drag this grip to reorder manual Up next. Up/Down buttons also work.",
+        ))
 }
 
 impl App {
@@ -97,7 +99,7 @@ impl App {
         }
         if ctx.content_rect().width() < 1180. {
             let mut open = true;
-            egui::Window::new("Queue / History")
+            egui::Window::new(tr("Queue / History"))
                 .open(&mut open)
                 .default_width(360.)
                 .default_height((ctx.available_rect().height() - 48.).max(120.))
@@ -113,7 +115,7 @@ impl App {
                 .default_width(310.)
                 .width_range(280.0..=420.)
                 .resizable(true)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(16))
+                .frame(egui::Frame::new().fill(theme_panel()).inner_margin(16))
                 .show(ctx, |ui| self.queue_contents(ui));
         }
     }
@@ -124,10 +126,10 @@ impl App {
         let mut action = None;
         let mut track_action = None;
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.listening.show_panel, false, "Queue");
-            ui.selectable_value(&mut self.listening.show_panel, true, "History");
+            ui.selectable_value(&mut self.listening.show_panel, false, tr("Queue"));
+            ui.selectable_value(&mut self.listening.show_panel, true, tr("History"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, Icon::Close, "Close Queue / History", false, 24.).clicked() {
+                if icon_button(ui, Icon::Close, tr("Close Queue / History"), false, 24.).clicked() {
                     self.queue_open = false;
                 }
             });
@@ -138,28 +140,28 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            surfaces::section_title(ui, "Up next");
+            surfaces::section_title(ui, tr("Up next"));
             ui.label(
                 RichText::new(format!("{} tracks", self.queue.upcoming_len()))
                     .size(12.)
-                    .color(MUTED),
+                    .color(theme_muted()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let menu = icon_button(ui, Icon::More, "Queue actions", false, 28.);
+                let menu = icon_button(ui, Icon::More, tr("Queue actions"), false, 28.);
                 egui::Popup::menu(&menu).show(|ui| {
-                    if ui.button("Save queue as TIDAL playlist…").clicked() {
+                    if ui.button(tr("Save queue as TIDAL playlist…")).clicked() {
                         action = Some(Action::Save);
                         ui.close();
                     }
-                    if ui.button("Clear manual Up next").clicked() {
+                    if ui.button(tr("Clear manual Up next")).clicked() {
                         action = Some(Action::ClearManual);
                         ui.close();
                     }
-                    if ui.button("Clear remaining source tracks").clicked() {
+                    if ui.button(tr("Clear remaining source tracks")).clicked() {
                         action = Some(Action::ClearSource);
                         ui.close();
                     }
-                    if ui.button("Stop and clear entire queue").clicked() {
+                    if ui.button(tr("Stop and clear entire queue")).clicked() {
                         action = Some(Action::ClearAll);
                         ui.close();
                     }
@@ -167,29 +169,33 @@ impl App {
             });
         });
         ui.add_space(8.);
-        ui.label(RichText::new("NOW PLAYING").size(10.).color(ACCENT));
+        ui.label(
+            RichText::new(tr("NOW PLAYING"))
+                .size(10.)
+                .color(theme_accent()),
+        );
         if let Some(track) = self.queue.current() {
             surfaces::track_tile(ui, track, false, true)
                 .context_menu(|ui| track_menu(ui, track, &mut track_action));
         } else {
-            ui.label("Choose a track, or press Play to start Up next.");
+            ui.label(tr("Choose a track, or press Play to start Up next."));
         }
         if self.context_loading {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Loading source continuation…");
+                ui.label(tr("Loading source continuation…"));
             });
         }
         if let Some(error) = &self.context_error {
-            ui.colored_label(Color32::LIGHT_RED, error);
-            if ui.button("Retry source loading").clicked() {
+            ui.colored_label(theme_error(), error);
+            if ui.button(tr("Retry source loading")).clicked() {
                 action = Some(Action::Retry);
             }
         } else if self.queue.continuation().is_some() && !self.context_loading && self.paused {
             ui.label(
-                RichText::new("More source tracks load when playback starts.")
+                RichText::new(tr("More source tracks load when playback starts."))
                     .size(11.)
-                    .color(MUTED),
+                    .color(theme_muted()),
             );
         }
         if self.appearance.radio_continuation {
@@ -198,8 +204,10 @@ impl App {
                 .message
                 .as_deref()
                 .unwrap_or("Track recommendation continuation enabled");
-            ui.add(egui::Label::new(RichText::new(message).size(11.).color(MUTED)).truncate())
-                .on_hover_text(message);
+            ui.add(
+                egui::Label::new(RichText::new(message).size(11.).color(theme_muted())).truncate(),
+            )
+            .on_hover_text(message);
         }
         ui.separator();
         if !self.queue.title().is_empty() {
@@ -207,7 +215,7 @@ impl App {
                 egui::Label::new(
                     RichText::new(format!("Source · {}", self.queue.title()))
                         .size(12.)
-                        .color(MUTED),
+                        .color(theme_muted()),
                 )
                 .truncate(),
             );
@@ -222,7 +230,8 @@ impl App {
         let rows = entries.len();
         if rows == 0 {
             ui.label(
-                RichText::new("No upcoming tracks. Use + or Play next to add one.").color(MUTED),
+                RichText::new(tr("No upcoming tracks. Use + or Play next to add one."))
+                    .color(theme_muted()),
             );
         }
         egui::ScrollArea::vertical()
@@ -253,7 +262,7 @@ impl App {
                                         "FROM SOURCE"
                                     })
                                     .size(10.)
-                                    .color(MUTED),
+                                    .color(theme_muted()),
                                 );
                                 let response = ui
                                     .horizontal(|ui| {
@@ -284,7 +293,7 @@ impl App {
                                     if manual {
                                         if ui
                                             .add_enabled_ui(index > 0, |ui| {
-                                                icon_button(ui, Icon::Up, "Move up", false, 24.)
+                                                icon_button(ui, Icon::Up, tr("Move up"), false, 24.)
                                             })
                                             .inner
                                             .clicked()
@@ -294,7 +303,13 @@ impl App {
                                         }
                                         if ui
                                             .add_enabled_ui(index + 1 < manual_count, |ui| {
-                                                icon_button(ui, Icon::Down, "Move down", false, 24.)
+                                                icon_button(
+                                                    ui,
+                                                    Icon::Down,
+                                                    tr("Move down"),
+                                                    false,
+                                                    24.,
+                                                )
                                             })
                                             .inner
                                             .clicked()
@@ -305,7 +320,7 @@ impl App {
                                         if icon_button(
                                             ui,
                                             Icon::Close,
-                                            "Remove from Up next",
+                                            tr("Remove from Up next"),
                                             false,
                                             24.,
                                         )
@@ -317,13 +332,13 @@ impl App {
                                         ui.label(
                                             RichText::new(time(entry.track.duration))
                                                 .size(11.)
-                                                .color(MUTED),
+                                                .color(theme_muted()),
                                         );
                                     }
                                     let more = icon_button(
                                         ui,
                                         Icon::More,
-                                        "Queued track actions",
+                                        tr("Queued track actions"),
                                         false,
                                         24.,
                                     );
@@ -353,7 +368,7 @@ impl App {
                                 pos2(row_response.rect.left(), y),
                                 pos2(row_response.rect.right(), y),
                             ],
-                            Stroke::new(2.0_f32, ACCENT),
+                            Stroke::new(2.0_f32, theme_accent()),
                         );
                         if let Some(drag) = row_response.dnd_release_payload::<QueueDrag>() {
                             action = Some(Action::Drop((*drag).clone(), entry.occurrence, after));

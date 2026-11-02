@@ -432,7 +432,7 @@ impl App {
         let mut close = false;
         let mut refresh = false;
         let mut submit = false;
-        egui::Window::new("Reorder playlist")
+        egui::Window::new(tr("Reorder playlist"))
             .id(egui::Id::new("playlist-reorder"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -458,11 +458,11 @@ impl App {
                     )
                 });
                 ui.add(egui::Label::new(RichText::new(&dialog.title).strong()).truncate());
-                ui.label("This changes your TIDAL playlist, not the current playback queue.");
+                ui.label(tr("This changes your TIDAL playlist, not the current playback queue."));
                 if let Some(error) = &dialog.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                    refresh = ui.button("Refresh and inspect playlist").clicked();
-                    close = ui.button("Close").clicked();
+                    ui.colored_label(theme_error(), error);
+                    refresh = ui.button(tr("Refresh and inspect playlist")).clicked();
+                    close = ui.button(tr("Close")).clicked();
                 } else if dialog.choosing_position {
                     ui.label(format!("Final position (1–{}):", dialog.change.ids.len()));
                     ui.add(
@@ -470,12 +470,12 @@ impl App {
                             .desired_width(120.)
                             .char_limit(64),
                     );
-                    ui.label("Positions refer to Original order, not a filtered or sorted view.");
+                    ui.label(tr("Positions refer to Original order, not a filtered or sorted view."));
                     let valid = dialog.position_target().is_some();
                     if !valid && !dialog.position.is_empty() {
                         ui.colored_label(
-                            Color32::LIGHT_RED,
-                            "Enter a different whole-number position within the range.",
+                            theme_error(),
+                            tr("Enter a different whole-number position within the range."),
                         );
                     }
                     if !can_choose {
@@ -487,9 +487,9 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         submit = ui
-                            .add_enabled(can_choose && valid, egui::Button::new("Move to position"))
+                            .add_enabled(can_choose && valid, egui::Button::new(tr("Move to position")))
                             .clicked();
-                        close = ui.button("Cancel").clicked();
+                        close = ui.button(tr("Cancel")).clicked();
                     });
                 } else {
                     ui.spinner();
@@ -499,10 +499,10 @@ impl App {
                                 "Checking source: {offset} / {}",
                                 dialog.change.ids.len()
                             ));
-                            close = ui.button("Cancel before move").clicked();
+                            close = ui.button(tr("Cancel before move")).clicked();
                         }
                         Phase::Write => {
-                            ui.label("Moving track…");
+                            ui.label(tr("Moving track…"));
                         }
                         Phase::Readback { offset, .. } => {
                             ui.label(format!(
@@ -512,7 +512,7 @@ impl App {
                         }
                     }
                     if self.buffering {
-                        ui.label("Waiting for playback buffering…");
+                        ui.label(tr("Waiting for playback buffering…"));
                     }
                 }
             });

@@ -158,7 +158,7 @@ impl App {
                 });
             let menu = ui
                 .add(egui::Button::new("").min_size(vec2(34., 34.)))
-                .on_hover_text("Library view actions");
+                .on_hover_text(tr("Library view actions"));
             menu.widget_info(|| {
                 egui::WidgetInfo::labeled(
                     egui::WidgetType::Button,
@@ -166,10 +166,16 @@ impl App {
                     "Library view actions",
                 )
             });
-            paint_icon(ui.painter(), Icon::Queue, menu.rect.center(), 16., MUTED);
+            paint_icon(
+                ui.painter(),
+                Icon::Queue,
+                menu.rect.center(),
+                16.,
+                theme_muted(),
+            );
             egui::Popup::menu(&menu).show(|ui| {
-                ui.checkbox(&mut self.library_view.reverse, "Reverse view");
-                if ui.button("Reset view").clicked() {
+                ui.checkbox(&mut self.library_view.reverse, tr("Reverse view"));
+                if ui.button(tr("Reset view")).clicked() {
                     self.library_view.query.clear();
                     self.library_view.sort = Sort::Original;
                     self.library_view.reverse = false;
@@ -199,10 +205,10 @@ impl App {
         } else {
             self.artists.len()
         };
-        ui.label(RichText::new(format!("{} of {} loaded · view only",self.library_view.rows.len(),loaded)).size(12.).color(MUTED))
-            .on_hover_text("Filtering and sorting apply only to loaded items. Load more or Load all to include the rest; raw pagination and saved order are unchanged.");
+        ui.label(RichText::new(format!("{} of {} loaded · view only",self.library_view.rows.len(),loaded)).size(12.).color(theme_muted()))
+            .on_hover_text(tr("Filtering and sorting apply only to loaded items. Load more or Load all to include the rest; raw pagination and saved order are unchanged."));
         if loaded > 0 && self.library_view.rows.is_empty() {
-            ui.label("No loaded items match. Load more or reset the view.");
+            ui.label(tr("No loaded items match. Load more or reset the view."));
         }
         ui.add_space(8.);
     }

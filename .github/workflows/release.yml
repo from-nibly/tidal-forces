@@ -49,6 +49,8 @@ jobs:
         run: python3 tests/output-pulse.py
       - name: Isolated native tray and window-close contract
         run: python3 tests/tray.py
+      - name: Private classic skin import contract
+        run: python3 tests/skin-import.py
       - name: Build the single executable
         run: cargo build --locked --release
       - name: Verify release executable

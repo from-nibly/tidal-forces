@@ -1,6 +1,6 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.32.0 P5 native review and audio feedback are approved for publication and installation. v0.31.0 remains installed until deployment completes. P6 implementation is authorized after that installation, not P6 publication.**
+**Status: v0.32.0 P5 is published and installed. P6 v0.33.0 passed native review and is approved for publication and installation. P7 planning is requested; implementation is not yet authorized.**
 
 The operator requested one version for the entire remaining P4 scope, not more
 incremental releases. The bundle includes output selection/preferences and route-loss
@@ -11,6 +11,20 @@ queue occurrences and generation guards. Capability limits must remain explicit:
 missing normalization or AAC trim metadata is not permission to invent values.
 Native hardware/audible validation still needs separate opt-in. P5 is excluded.
 No part of this bundle is to be published separately before combined native review.
+
+### Approved P6 release (v0.33.0)
+
+Light/system themes and contrast-checked custom palettes are implemented locally on
+central semantic colors across main, mini and focused-player views. English remains
+the only shipped language by explicit operator choice; an embedded catalog foundation
+is implemented, not invented bundled translations. Optional classic `.wsz` skins belong
+to the shared-state mini player, now implemented with bounded image-only parsing and
+no skin scripts, plugins or bundled third-party art. Local verification passes
+(444 normal tests on two compilers, strict lint, private contracts/native smokes);
+native operator review and version approval are complete; see [appearance](appearance.md),
+[catalog scope](localization.md) and [classic skins](classic-skins.md). MilkDrop and native platform ports remain later
+optional work. Preserve the approved running preview during publication and managed
+installation. Real account/device testing still requires separate authorization.
 
 ### Approved P5 release (v0.32.0)
 

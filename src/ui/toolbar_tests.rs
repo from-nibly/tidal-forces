@@ -26,9 +26,7 @@ fn field(output: &egui::FullOutput) -> egui::Rect {
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(24, 27, 31) => {
-                Some(rect.rect)
-            }
+            egui::Shape::Rect(rect) if rect.fill == theme_card() => Some(rect.rect),
             _ => None,
         })
         .unwrap()

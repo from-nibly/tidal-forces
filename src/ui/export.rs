@@ -459,40 +459,40 @@ impl App {
                     else if transfer.ids.is_empty() {ui.label(format!("No new songs for ‘{}’",transfer.title));}
                     else {ui.label(format!("Add {} {} to ‘{}’?",transfer.ids.len(),if transfer.ids.len()==1 {"song"} else {"songs"},transfer.title));}
                 }
-                else {ui.label(format!("{} songs · includes repeated songs",transfer.ids.len()));ui.label("Saves this fixed track snapshot. Later queue or radio-view changes won’t affect this playlist.");}
+                else {ui.label(format!("{} songs · includes repeated songs",transfer.ids.len()));ui.label(tr("Saves this fixed track snapshot. Later queue or radio-view changes won’t affect this playlist."));}
                 if !transfer.started {
                     if paste {
                         if let Some(unique)=&transfer.unique_ids {
                             let duplicates=transfer.original_ids.len()-unique.len();
                             if duplicates>0 {
                                 ui.label(if transfer.include_duplicates {format!("Including {duplicates} repeated {}.",if duplicates==1 {"song"} else {"songs"})} else {format!("Skipping {duplicates} {}.",if duplicates==1 {"duplicate"} else {"duplicates"})});
-                                if ui.checkbox(&mut transfer.include_duplicates,"Add duplicates too").changed() {
+                                if ui.checkbox(&mut transfer.include_duplicates,tr("Add duplicates too")).changed() {
                                     transfer.ids=if transfer.include_duplicates {transfer.original_ids.clone()} else {unique.clone()};
                                 }
                             }
-                            if transfer.ids.is_empty() {ui.label("These songs are already in this playlist.");}
-                            if transfer.base_offset+transfer.ids.len()>crate::queue::MAX_ENTRIES {ui.label("This would exceed the 50,000-song playlist limit.");}
-                        } else if transfer.error.is_none() {ui.horizontal(|ui|{ui.spinner();ui.label("Checking for duplicates…");});}
-                        if let Some(error)=&transfer.error {ui.colored_label(Color32::LIGHT_RED,"Couldn’t check these songs. Nothing has been added.");ui.collapsing("Details",|ui|{ui.label(error);});}
+                            if transfer.ids.is_empty() {ui.label(tr("These songs are already in this playlist."));}
+                            if transfer.base_offset+transfer.ids.len()>crate::queue::MAX_ENTRIES {ui.label(tr("This would exceed the 50,000-song playlist limit."));}
+                        } else if transfer.error.is_none() {ui.horizontal(|ui|{ui.spinner();ui.label(tr("Checking for duplicates…"));});}
+                        if let Some(error)=&transfer.error {ui.colored_label(theme_error(),tr("Couldn’t check these songs. Nothing has been added."));ui.collapsing(tr("Details"),|ui|{ui.label(error);});}
                     } else {
-                        ui.label("Playlist name"); ui.add(egui::TextEdit::singleline(&mut transfer.title).char_limit(200));
-                        ui.label("Description"); ui.add(egui::TextEdit::multiline(&mut transfer.description).char_limit(1000).desired_rows(2));
-                        ui.label("Creates a real playlist in your TIDAL account.");
+                        ui.label(tr("Playlist name")); ui.add(egui::TextEdit::singleline(&mut transfer.title).char_limit(200));
+                        ui.label(tr("Description")); ui.add(egui::TextEdit::multiline(&mut transfer.description).char_limit(1000).desired_rows(2));
+                        ui.label(tr("Creates a real playlist in your TIDAL account."));
                     }
                     let ready=if paste {transfer.unique_ids.is_some() && !transfer.ids.is_empty() && transfer.base_offset+transfer.ids.len()<=crate::queue::MAX_ENTRIES && transfer.error.is_none()} else {!transfer.title.trim().is_empty()};
                     if ui.add_enabled(ready, egui::Button::new(if paste {"Add songs"} else {"Create playlist"})).clicked() { transfer.started = true; }
                 } else {
                     ui.label(format!("{} of {} {} added", transfer.confirmed, transfer.ids.len(),if transfer.ids.len()==1 {"song"} else {"songs"}));
                     if transfer.busy { ui.spinner(); }
-                    if let Some(error) = &transfer.error { ui.colored_label(Color32::LIGHT_RED, error); ui.label("Some songs may already have been added. Check the playlist before trying again."); }
-                    if transfer.cancelled.load(Ordering::Acquire) { ui.label("Stopped. Songs already being added may still appear in the playlist."); }
-                    if let Some(playlist) = &transfer.playlist && ui.button("View playlist").clicked() {
+                    if let Some(error) = &transfer.error { ui.colored_label(theme_error(), error); ui.label(tr("Some songs may already have been added. Check the playlist before trying again.")); }
+                    if transfer.cancelled.load(Ordering::Acquire) { ui.label(tr("Stopped. Songs already being added may still appear in the playlist.")); }
+                    if let Some(playlist) = &transfer.playlist && ui.button(tr("View playlist")).clicked() {
                         destination = Some(Page::Collection { kind:"playlists".into(), id:playlist.uuid.clone(), title:playlist.title.clone() });
                     }
-                    if transfer.confirmed != transfer.ids.len() && !transfer.cancelled.load(Ordering::Acquire) && ui.button("Stop adding songs").clicked() { cancel = true; }
+                    if transfer.confirmed != transfer.ids.len() && !transfer.cancelled.load(Ordering::Acquire) && ui.button(tr("Stop adding songs")).clicked() { cancel = true; }
                 }
                 if (!transfer.busy || !transfer.started) && ui.button(if paste {"Close"} else {"Start a new queue snapshot…"}).clicked() { if paste {dismiss=true;} else {reset=true;} }
-                if !paste && can_snapshot_radio && (!transfer.busy || !transfer.started) && ui.button("Start a new loaded radio snapshot…").clicked() { reset_radio = true; }
+                if !paste && can_snapshot_radio && (!transfer.busy || !transfer.started) && ui.button(tr("Start a new loaded radio snapshot…")).clicked() { reset_radio = true; }
             });
         if !open || cancel {
             let forget_draft = !open

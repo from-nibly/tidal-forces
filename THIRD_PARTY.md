@@ -39,6 +39,19 @@ licenses remain in `vendor/libpulse-binding/`; the MIT notice is embedded in
 `--licenses`. The executable dynamically links the operating system's libpulse
 client library (LGPL-2.1-or-later); no PulseAudio daemon is bundled.
 
+Classic skin parsing uses zip 9.2.2 (MIT), with only stored/deflate support and the
+already-used Rust zlib backend. The iterable-reader API is pinned exactly because
+it is upstream-unstable; it allows entry-count checks before allocating an archive
+index and preserves duplicate names for rejection. New transitive nix 0.31.3 (MIT)
+and typed-path 0.13.0 (MIT option) notices, plus zip's notice, are embedded in
+`--licenses` and retained in `assets/licenses/`. BMP support uses the existing image
+crate; Unix regular-file/no-follow checks use the already-locked libc crate.
+No third-party skin art, Winamp executable, plugin, script or shader is bundled.
+Users must have permission to use their own skin assets. Synthetic fixture artwork
+is original test code, excluded from release builds. Sprite-coordinate compatibility
+was checked against Webamp's documented classic main-panel layouts; no Webamp code
+or artwork is incorporated.
+
 Other project dependencies and pinned versions are recorded in `Cargo.lock`.
 Inter font notices are in `assets/fonts/OFL.txt` and are also shown by
 `--licenses`. Application source remains MIT licensed under `LICENSE`.

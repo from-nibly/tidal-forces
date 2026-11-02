@@ -249,15 +249,15 @@ impl App {
         }
     }
     pub(super) fn favorite_cache_controls(&mut self, ui: &mut egui::Ui) {
-        surfaces::section_title(ui, "Favorite status");
-        ui.label("Checks saved tracks, albums and artists after sign-in. Kept in memory for this account, not on disk. Does not change your favorites.");
+        surfaces::section_title(ui, tr("Favorite status"));
+        ui.label(tr("Checks saved tracks, albums and artists after sign-in. Kept in memory for this account, not on disk. Does not change your favorites."));
         if let Some(job) = &self.favorite_cache.job {
             ui.label(format!(
                 "Checking {} · {} entries read",
                 FavoriteKind::ALL[job.kind].label().to_lowercase(),
                 job.offset
             ));
-            if ui.button("Stop checking").clicked() {
+            if ui.button(tr("Stop checking")).clicked() {
                 self.stop_favorite_cache(
                     "Saved-status check stopped. Unknown items keep their actions menu.",
                 );
@@ -269,7 +269,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.connected && !self.favorites.has_pending(),
-                    egui::Button::new("Refresh saved status"),
+                    egui::Button::new(tr("Refresh saved status")),
                 )
                 .clicked()
             {

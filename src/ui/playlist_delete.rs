@@ -242,30 +242,30 @@ impl App {
             .show(ctx, |ui| {
                 ui.strong(&dialog.title);
                 if action==Action::Delete {
-                    ui.label("Permanently delete the entire playlist from TIDAL. This is not unfollowing and cannot be undone here.");
-                    ui.label("Songs, queued tracks and local pins are kept. Further loading from this playlist may fail.");
+                    ui.label(tr("Permanently delete the entire playlist from TIDAL. This is not unfollowing and cannot be undone here."));
+                    ui.label(tr("Songs, queued tracks and local pins are kept. Further loading from this playlist may fail."));
                 } else {
-                    ui.label("Stop following this playlist in your TIDAL library. This does not delete the owner's playlist.");
-                    ui.label("Your current queue, loaded tracks and local pins are kept.");
-                    ui.label("Removal can only be verified from a complete library response. Large or incomplete libraries may require manual inspection.");
+                    ui.label(tr("Stop following this playlist in your TIDAL library. This does not delete the owner's playlist."));
+                    ui.label(tr("Your current queue, loaded tracks and local pins are kept."));
+                    ui.label(tr("Removal can only be verified from a complete library response. Large or incomplete libraries may require manual inspection."));
                 }
                 if dialog.busy {
                     ui.spinner(); ui.label(if action==Action::Delete {"Deleting and verifying…"} else {"Unfollowing and checking…"});
                 } else if let Some(error) = &dialog.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                    refresh = ui.button("Refresh and inspect").clicked();
-                    close = ui.button("Close").clicked();
+                    ui.colored_label(theme_error(), error);
+                    refresh = ui.button(tr("Refresh and inspect")).clicked();
+                    close = ui.button(tr("Close")).clicked();
                 } else {
                     if action==Action::Delete {
-                        ui.label("Type DELETE to confirm:");
+                        ui.label(tr("Type DELETE to confirm:"));
                         ui.add(egui::TextEdit::singleline(&mut dialog.confirmation).char_limit(6));
                     }
                     ui.horizontal(|ui| {
                         let button = if action==Action::Delete {
-                            egui::Button::new(egui::RichText::new("Delete playlist permanently").color(Color32::LIGHT_RED))
-                        } else {egui::Button::new("Unfollow playlist")};
+                            egui::Button::new(egui::RichText::new(tr("Delete playlist permanently")).color(theme_error()))
+                        } else {egui::Button::new(tr("Unfollow playlist"))};
                         confirm = ui.add_enabled(can_confirm && (action==Action::Unfollow || dialog.confirmation=="DELETE"),button).clicked();
-                        close = ui.button("Cancel").clicked();
+                        close = ui.button(tr("Cancel")).clicked();
                     });
                 }
             });

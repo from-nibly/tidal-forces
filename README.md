@@ -38,6 +38,16 @@ The graphical player requires a desktop session D-Bus for single-instance
 activation and system media controls. The executable is
 not fully static and does not depend on a Nix store closure.
 
+## P6 appearance (v0.33)
+
+Version **0.33.0** adds
+[Dark/Light/System and custom palettes](docs/appearance.md), an
+[English-only catalog foundation](docs/localization.md), and optional bounded
+[classic `.wsz` mini-player skins](docs/classic-skins.md). Skins use the same
+queue and playback owner, with honest native quality/status reporting outside the
+artwork. The branded mode remains the default. Native review and version approval
+are complete; MilkDrop and platform ports remain later optional work.
+
 ## P5 daily-use surfaces (v0.32)
 
 Version **0.32.0** adds artwork-click/L
@@ -210,8 +220,8 @@ pages. Filter/sort, selection and metadata-edit tools remain P3 work.
 
 The [implementation roadmap](docs/feature-plan.md) remains staged. Native visual
 review preceded the library/playlist power tools and P4 audio bundle. P5
-lyrics/Now Playing and mini/tray controls are now in development; Google Cast
-remains pending. Genuine TIDAL
+lyrics/Now Playing and mini/tray controls shipped in v0.32; P6 appearance follows
+in v0.33. Google Cast remains pending. Genuine TIDAL
 Connect remains separately gated; there is no network discovery or laptop receiver
 enabled.
 
@@ -829,8 +839,7 @@ is bundled.
 
 Not yet included: nested-folder creation, folder deletion, playlist-cover editing,
 offline audio downloads, TIDAL Connect, infinite radio, universal gapless track
-transitions or a built-in updater. P5 lyrics/tray surfaces remain development-only
-until v0.32 review and approval.
+transitions or a built-in updater.
 
 The Rust application is MIT licensed; the bundled AAC codec and fonts retain
 their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md), run `--licenses` for the

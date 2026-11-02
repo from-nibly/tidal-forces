@@ -22,7 +22,7 @@ fn selection_checkbox(
     ] {
         visual.corner_radius = 3.into();
         if *selected || partial {
-            visual.fg_stroke.color = ACCENT;
+            visual.fg_stroke.color = theme_accent();
         }
     }
     ui.add_enabled(
@@ -139,11 +139,11 @@ impl App {
                     !self.loading,
                     egui::TextEdit::singleline(&mut self.track_view.query)
                         .id(egui::Id::new("track-filter"))
-                        .hint_text("Filter loaded songs")
+                        .hint_text(tr("Filter loaded songs"))
                         .desired_width(filter_width)
                         .min_size(vec2(0., 34.))
                         .font(egui::FontId::proportional(13.))
-                        .background_color(Color32::from_rgb(22, 25, 30))
+                        .background_color(theme_card())
                         .margin(egui::Margin {
                             left: 30,
                             right: 10,
@@ -157,7 +157,7 @@ impl App {
                     Icon::Search,
                     pos2(filter.rect.left() + 14., filter.rect.center().y),
                     14.,
-                    MUTED,
+                    theme_muted(),
                 );
                 if filter.has_focus() {
                     self.track_selection.pending_focus = None;
@@ -173,7 +173,7 @@ impl App {
                         .selected_text(
                             RichText::new(self.track_view.sort.label())
                                 .size(12.)
-                                .color(MUTED),
+                                .color(theme_muted()),
                         )
                         .show_ui(ui, |ui| {
                             for sort in [
@@ -199,11 +199,17 @@ impl App {
                             "Track actions",
                         )
                     });
-                    paint_icon(ui.painter(), Icon::Queue, menu.rect.center(), 16., MUTED);
+                    paint_icon(
+                        ui.painter(),
+                        Icon::Queue,
+                        menu.rect.center(),
+                        16.,
+                        theme_muted(),
+                    );
                     egui::Popup::menu(&menu).show(|ui| {
                         ui.label(format!("{} selected", self.track_selection.rows.len()));
                         ui.add_enabled_ui(!self.track_selection.rows.is_empty(), |ui| {
-                            if ui.button("Copy links").clicked() {
+                            if ui.button(tr("Copy links")).clicked() {
                                 selection_action = Some(SelectionAction::Copy);
                                 ui.close();
                             }
@@ -218,14 +224,14 @@ impl App {
                                     }
                                 }
                             });
-                            if ui.button("Clear").clicked() {
+                            if ui.button(tr("Clear")).clicked() {
                                 selection_action = Some(SelectionAction::Clear);
                                 ui.close();
                             }
                         });
                         ui.separator();
-                        ui.checkbox(&mut self.track_view.reverse, "Reverse");
-                        if self.track_view.active() && ui.button("Reset view").clicked() {
+                        ui.checkbox(&mut self.track_view.reverse, tr("Reverse"));
+                        if self.track_view.active() && ui.button(tr("Reset view")).clicked() {
                             self.track_view.query.clear();
                             self.track_view.sort = track_view::Sort::Original;
                             self.track_view.reverse = false;
@@ -245,12 +251,12 @@ impl App {
                     self.tracks.len()
                 ))
                 .size(12.)
-                .color(MUTED),
+                .color(theme_muted()),
             );
         }
         let rows = &self.track_view.rows;
         if rows.is_empty() {
-            ui.label("No matching songs in the loaded tracks.");
+            ui.label(tr("No matching songs in the loaded tracks."));
             return;
         }
         let mut play = None;
@@ -317,7 +323,9 @@ impl App {
             }
         }
         let mut table_focused = check_all.has_focus();
-        check_all.on_hover_text("Select all shown tracks (not hidden tracks or unloaded pages)");
+        check_all.on_hover_text(tr(
+            "Select all shown tracks (not hidden tracks or unloaded pages)",
+        ));
         for (x, label) in [
             (header.left() + 42., "#"),
             (header.left() + title_offset, "TITLE"),
@@ -327,7 +335,7 @@ impl App {
                 egui::Align2::LEFT_CENTER,
                 label,
                 egui::FontId::proportional(10.),
-                MUTED,
+                theme_muted(),
             );
         }
         ui.painter().text(
@@ -335,7 +343,7 @@ impl App {
             egui::Align2::RIGHT_CENTER,
             "TIME",
             egui::FontId::proportional(10.),
-            MUTED,
+            theme_muted(),
         );
         if artist_width > 0. {
             ui.painter().text(
@@ -346,13 +354,13 @@ impl App {
                 egui::Align2::LEFT_CENTER,
                 "ARTIST",
                 egui::FontId::proportional(10.),
-                MUTED,
+                theme_muted(),
             );
         }
         ui.painter().hline(
             header.x_range(),
             header.bottom(),
-            Stroke::new(1.0_f32, BORDER),
+            Stroke::new(1.0_f32, theme_border()),
         );
         let (id, bounds) = ui.allocate_space(vec2(width, height * rows.len() as f32));
         for position in visible_rows(bounds, ui.clip_rect(), height, rows.len()) {
@@ -389,11 +397,11 @@ impl App {
                     rect,
                     6.,
                     if selected {
-                        SELECTED
+                        theme_selected()
                     } else if playing {
-                        PLAYING
+                        theme_playing()
                     } else {
-                        CARD
+                        theme_card()
                     },
                 );
             }
@@ -441,7 +449,7 @@ impl App {
                         ui.painter().circle_filled(
                             pos2(rect.left() + 44. + x, rect.center().y + y),
                             1.5,
-                            ACCENT,
+                            theme_accent(),
                         );
                     }
                 }
@@ -452,14 +460,14 @@ impl App {
                         vec2(2., height - 20.),
                     ),
                     1.,
-                    ACCENT,
+                    theme_accent(),
                 );
                 paint_icon(
                     ui.painter(),
                     Icon::Play,
                     pos2(rect.left() + 44., rect.center().y),
                     10.,
-                    ACCENT,
+                    theme_accent(),
                 );
             } else {
                 ui.painter().text(
@@ -467,11 +475,14 @@ impl App {
                     egui::Align2::CENTER_CENTER,
                     format!("{}", i + 1),
                     egui::FontId::proportional(11.),
-                    MUTED,
+                    theme_muted(),
                 );
             }
-            ui.painter()
-                .hline(rect.x_range(), rect.bottom(), Stroke::new(0.5_f32, BORDER));
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom(),
+                Stroke::new(0.5_f32, theme_border()),
+            );
             if let Some(drag) = response.dnd_hover_payload::<playlist_drag::Drag>() {
                 let after = ui.input(|input| {
                     input
@@ -483,7 +494,7 @@ impl App {
                     ui.painter().hline(
                         rect.x_range(),
                         if after { rect.bottom() } else { rect.top() },
-                        Stroke::new(2.0_f32, ACCENT),
+                        Stroke::new(2.0_f32, theme_accent()),
                     );
                     if let Some(drag) = response.dnd_release_payload::<playlist_drag::Drag>() {
                         drop_move = Some((drag, target));
@@ -494,7 +505,7 @@ impl App {
                 ui.painter().rect_stroke(
                     rect,
                     6.,
-                    Stroke::new(1.0_f32, ACCENT),
+                    Stroke::new(1.0_f32, theme_accent()),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -552,17 +563,17 @@ impl App {
             let unavailable = self.unavailable.contains(&t.id);
             let title_response = title.add(
                 egui::Label::new(RichText::new(&t.title).size(14.).color(if unavailable {
-                    MUTED
+                    theme_muted()
                 } else if playing {
-                    ACCENT
+                    theme_accent()
                 } else {
-                    TEXT
+                    theme_text()
                 }))
                 .truncate()
                 .selectable(false),
             );
             if unavailable {
-                title_response.on_hover_text("Confirmed unavailable for this account. Play retries; markers clear when the account session changes.");
+                title_response.on_hover_text(tr("Confirmed unavailable for this account. Play retries; markers clear when the account session changes."));
             }
             title.add(
                 egui::Label::new(
@@ -576,7 +587,7 @@ impl App {
                         if t.explicit { " · Explicit" } else { "" }
                     ))
                     .size(12.)
-                    .color(MUTED),
+                    .color(theme_muted()),
                 )
                 .truncate()
                 .selectable(false),
@@ -591,7 +602,7 @@ impl App {
                         )),
                 );
                 artist.add(
-                    egui::Label::new(RichText::new(&t.artist.name).size(12.).color(MUTED))
+                    egui::Label::new(RichText::new(&t.artist.name).size(12.).color(theme_muted()))
                         .truncate()
                         .selectable(false),
                 );
@@ -624,7 +635,7 @@ impl App {
                         }
                     }
                     if ui
-                        .add_enabled(reorderable, egui::Button::new("Move to position…"))
+                        .add_enabled(reorderable, egui::Button::new(tr("Move to position…")))
                         .on_disabled_hover_text(help)
                         .clicked()
                     {
@@ -632,7 +643,7 @@ impl App {
                         ui.close();
                     }
                 }
-                if removable && ui.button("Remove from this playlist…").clicked() {
+                if removable && ui.button(tr("Remove from this playlist…")).clicked() {
                     remove = Some(i);
                     ui.close();
                 }
@@ -647,9 +658,9 @@ impl App {
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
             actions.spacing_mut().item_spacing.x = 4.;
-            let more = icon_button(&mut actions, Icon::More, "Track actions", false, 28.);
+            let more = icon_button(&mut actions, Icon::More, tr("Track actions"), false, 28.);
             egui::Popup::menu(&more).show(&mut menu);
-            if icon_button(&mut actions, Icon::Add, "Add to Up next", false, 28.).clicked() {
+            if icon_button(&mut actions, Icon::Add, tr("Add to Up next"), false, 28.).clicked() {
                 add = Some(t.clone());
             }
             favorite_button(
@@ -658,7 +669,11 @@ impl App {
                 Favorite::new(FavoriteKind::Tracks, t.id),
                 &mut favorite,
             );
-            actions.label(RichText::new(time(t.duration)).size(12.).color(MUTED));
+            actions.label(
+                RichText::new(time(t.duration))
+                    .size(12.)
+                    .color(theme_muted()),
+            );
             if self.audio_available
                 && unmodified
                 && (response.double_clicked()
@@ -669,7 +684,7 @@ impl App {
             }
             cover.context_menu(&mut menu);
             response.context_menu(menu);
-            response.on_hover_text("Click to select · Ctrl/Shift-click for multiple tracks · Shift+Up/Down selects a range · Ctrl+A selects shown tracks · Ctrl+C copies links in view order · Double-click or Enter to play");
+            response.on_hover_text(tr("Click to select · Ctrl/Shift-click for multiple tracks · Shift+Up/Down selects a range · Ctrl+A selects shown tracks · Ctrl+C copies links in view order · Double-click or Enter to play"));
         }
         if table_focused && !self.loading {
             if ui.input_mut(|input| {

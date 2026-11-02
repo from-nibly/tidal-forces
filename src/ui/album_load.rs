@@ -122,11 +122,11 @@ impl App {
     }
     pub(super) fn album_load_controls(&mut self, ui: &mut egui::Ui) {
         if self.album_load.is_some() {
-            ui.spinner();ui.label("Loading…");
-            if ui.button("Stop loading").clicked() {self.album_load=None;}
+            ui.spinner();ui.label(tr("Loading…"));
+            if ui.button(tr("Stop loading")).clicked() {self.album_load=None;}
         } else if matches!(&self.page,Page::Collection{kind,..} if kind=="albums") && self.more
-            && ui.add_enabled(self.can_load_album(),egui::Button::new("Load all album tracks"))
-            .on_hover_text("Read remaining album pages, up to 50,000 entries. Unavailable entries still count toward pagination. Does not change playback; an in-flight page may finish after stopping.").clicked() {
+            && ui.add_enabled(self.can_load_album(),egui::Button::new(tr("Load all album tracks")))
+            .on_hover_text(tr("Read remaining album pages, up to 50,000 entries. Unavailable entries still count toward pagination. Does not change playback; an in-flight page may finish after stopping.")).clicked() {
             self.start_album_load();
         }
     }

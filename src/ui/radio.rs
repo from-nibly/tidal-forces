@@ -175,18 +175,18 @@ impl App {
         if ui
             .checkbox(
                 &mut self.appearance.radio_continuation,
-                "Continue with TIDAL track recommendations",
+                tr("Continue with TIDAL track recommendations"),
             )
             .changed()
         {
             self.radio.reset();
             self.save_appearance();
         }
-        ui.label("Opt-in: up to 3 requests / 150 new tracks per source or explicit re-enable. Manual Up next keeps priority; repeat disables fetching. Late or failed results never restart stopped playback.");
+        ui.label(tr("Opt-in: up to 3 requests / 150 new tracks per source or explicit re-enable. Manual Up next keeps priority; repeat disables fetching. Late or failed results never restart stopped playback."));
         if self.appearance.radio_continuation
             && let Some(message) = &self.radio.message
         {
-            ui.label(RichText::new(message).size(12.).color(MUTED));
+            ui.label(RichText::new(message).size(12.).color(theme_muted()));
         }
     }
 }

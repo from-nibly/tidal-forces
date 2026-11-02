@@ -52,7 +52,8 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
             "lyrics-plain",
             "lyrics-missing",
             "lyrics-rtl",
-            "mini-player"
+            "mini-player",
+            "mini-classic"
         ]
         .contains(&page.as_str()),
         "Unknown fixture page"
@@ -62,12 +63,29 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
     let zoom: f32 = args.get(4).map_or(Ok(1.), |v| v.parse())?;
     anyhow::ensure!(
         width.is_finite()
-            && ((if page == "mini-player" { 380. } else { 600. })..=2560.).contains(&width)
+            && ((if page.starts_with("mini-") {
+                380.
+            } else {
+                600.
+            })..=2560.)
+                .contains(&width)
             && height.is_finite()
-            && ((if page == "mini-player" { 250. } else { 440. })..=1440.).contains(&height)
+            && ((if page.starts_with("mini-") {
+                250.
+            } else {
+                440.
+            })..=1440.)
+                .contains(&height)
             && (0.75..=1.5).contains(&zoom),
         "Invalid fixture dimensions"
     );
+    let theme = match args.get(5).map(String::as_str).unwrap_or("dark") {
+        "dark" => crate::palette::Theme::Dark,
+        "light" => crate::palette::Theme::Light,
+        "system" => crate::palette::Theme::System,
+        "custom" => crate::palette::Theme::Custom,
+        _ => anyhow::bail!("Unknown fixture theme"),
+    };
     let destination = path.clone();
     eframe::run_native(
         "Tidal Forces · Synthetic visual fixture",
@@ -81,6 +99,11 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
             let mut app = fixture(&ctx, &page);
+            app.appearance.theme = theme;
+            app.appearance.palette = crate::palette::Palette {
+                accent: [92, 40, 128],
+                ..crate::palette::Palette::LIGHT
+            };
             ctx.set_zoom_factor(zoom);
             app.screenshot = Some(destination);
             std::thread::spawn(move || {
@@ -330,7 +353,12 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
             app.settings_section = SettingsSection::Privacy;
             Page::Settings
         }
-        "mini-player" => {
+        "mini-player" | "mini-classic" => {
+            if page == "mini-classic" {
+                let skin = crate::skins::Skin::parse(&crate::skins::fixture::bytes()).unwrap();
+                app.classic.skin = Some(std::sync::Arc::new(classic::Textures::upload(ctx, skin)));
+                app.appearance.classic_skin = true;
+            }
             app.fixture_now_playing(ctx, "now-playing");
             app.close_now_playing(ctx);
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("fixture_mini"), true));
@@ -586,6 +614,104 @@ fn fixture(ctx: &egui::Context, page: &str) -> App {
 mod tests {
     use super::*;
     use eframe::App as _;
+    #[test]
+    fn accent_sign_in_label_uses_contrasting_ink_without_starting_sign_in() {
+        use crate::palette::{Palette, Theme};
+        for mode in [Theme::Dark, Theme::Light, Theme::Custom] {
+            let ctx = egui::Context::default();
+            let mut app = fixture(&ctx, "collection");
+            app.pkce_url = Some("https://example.invalid/synthetic-only".into());
+            app.pkce_redirect = "synthetic-unused-fixture".into();
+            let palette = Palette::resolve(mode, true, Palette::LIGHT);
+            let mut seen = false;
+            for _ in 0..2 {
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    let _scope = theme::scope(ctx, mode, Palette::LIGHT);
+                    app.lossless_sign_in(ctx);
+                });
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape
+                        && text.galley.job.text == "Finish lossless sign-in"
+                    {
+                        seen = true;
+                        assert_eq!(
+                            text.galley.job.sections[0].format.color.to_array()[..3],
+                            palette.on_accent()
+                        );
+                    }
+                }
+                assert!(!app.pkce_wait);
+                assert!(!app.signing_in);
+            }
+            assert!(seen, "Expected the synthetic sign-in action to render");
+        }
+    }
+
+    #[test]
+    fn theme_changes_preserve_playback_and_cover_every_surface() {
+        use crate::palette::{Palette, Theme};
+        for scene in [
+            "collection",
+            "settings",
+            "mini-player",
+            "now-playing",
+            "output-lost",
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = fixture(&ctx, scene);
+            let state = (
+                app.play_generation,
+                app.queue.revision(),
+                app.paused,
+                app.volume,
+            );
+            for (mode, system) in [
+                (Theme::Dark, egui::Theme::Light),
+                (Theme::Light, egui::Theme::Dark),
+                (Theme::System, egui::Theme::Light),
+                (Theme::System, egui::Theme::Dark),
+                (Theme::Custom, egui::Theme::Dark),
+            ] {
+                app.appearance.theme = mode;
+                app.appearance.palette = Palette::LIGHT;
+                for _ in 0..2 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(667., 440.),
+                            )),
+                            system_theme: Some(system),
+                            ..Default::default()
+                        },
+                        |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+                    );
+                    for shape in output.shapes {
+                        if let egui::Shape::Text(text) = shape.shape {
+                            assert!(!text.galley.job.text.contains("theme_"));
+                        }
+                    }
+                }
+                let expected = Palette::resolve(mode, system == egui::Theme::Dark, Palette::LIGHT);
+                assert_eq!(ctx.style().visuals.dark_mode, expected.dark());
+                assert_eq!(
+                    ctx.style().visuals.weak_text_color.unwrap().to_array()[..3],
+                    expected.muted
+                );
+                assert_eq!(ctx.style().visuals.panel_fill.to_array()[..3], expected.bg);
+                assert_eq!(
+                    (
+                        app.play_generation,
+                        app.queue.revision(),
+                        app.paused,
+                        app.volume
+                    ),
+                    state
+                );
+            }
+        }
+    }
+
     #[test]
     fn library_controls_fit_minimum_normal_and_zoom_equivalent_widths() {
         for size in [vec2(1000., 660.), vec2(1240., 820.), vec2(667., 440.)] {

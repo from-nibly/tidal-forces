@@ -98,7 +98,10 @@ impl App {
     pub(super) fn folder_menu(&mut self, response: &egui::Response, folder: Folder) {
         folder_popup(response).show(|ui| {
             if ui
-                .add_enabled(self.can_edit_folders(), egui::Button::new("Rename folder…"))
+                .add_enabled(
+                    self.can_edit_folders(),
+                    egui::Button::new(tr("Rename folder…")),
+                )
                 .clicked()
             {
                 self.open_folder_edit(Change::Rename {
@@ -107,7 +110,7 @@ impl App {
                 });
                 ui.close();
             }
-            ui.label("Folder deletion and nesting are not enabled.");
+            ui.label(tr("Folder deletion and nesting are not enabled."));
         });
     }
     pub(super) fn playlist_folder_menu(
@@ -120,7 +123,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.can_edit_folders(),
-                    egui::Button::new("Move to folder…"),
+                    egui::Button::new(tr("Move to folder…")),
                 )
                 .clicked()
             {
@@ -222,9 +225,9 @@ impl App {
         let mut submit = false;
         let mut close = false;
         let mut refresh = false;
-        egui::Window::new("Organize folders").id(egui::Id::new("folder-edit")).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).collapsible(false).resizable(false).default_width(410.).show(ctx,|ui| {
+        egui::Window::new(tr("Organize folders")).id(egui::Id::new("folder-edit")).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).collapsible(false).resizable(false).default_width(410.).show(ctx,|ui| {
             ui.add_enabled_ui(!dialog.busy && dialog.error.is_none(),|ui|match &mut dialog.change {
-                Change::Create {name,..}=>{ui.label("Create a folder in your library root:");ui.add(egui::TextEdit::singleline(name).char_limit(512));}
+                Change::Create {name,..}=>{ui.label(tr("Create a folder in your library root:"));ui.add(egui::TextEdit::singleline(name).char_limit(512));}
                 Change::Rename {folder,name}=>{ui.label(format!("Rename {}:",folder.name));ui.add(egui::TextEdit::singleline(name).char_limit(512));}
                 Change::MovePlaylist {title,destination,source,..}=>{
                     ui.label(format!("Move {title} to:"));
@@ -233,17 +236,17 @@ impl App {
                             if ui.add_enabled(&folder.id!=source,egui::Button::new(&folder.name).selected(folder==destination)).clicked() {*destination=folder.clone();}
                         }
                     });
-                    ui.label("Only uniquely named root folders are listed. Rename duplicates before choosing a destination.");
+                    ui.label(tr("Only uniquely named root folders are listed. Rename duplicates before choosing a destination."));
                 }
             });
-            ui.label("Your playback queue stays unchanged. Changes made in another app can conflict. We verify the result; if it is uncertain, Refresh and inspect before trying again.");
+            ui.label(tr("Your playback queue stays unchanged. Changes made in another app can conflict. We verify the result; if it is uncertain, Refresh and inspect before trying again."));
             if let Some(error)=&dialog.error {
-                ui.colored_label(Color32::LIGHT_RED,error);refresh=ui.button("Refresh folders and inspect").clicked();close=ui.button("Close").clicked();
+                ui.colored_label(theme_error(),error);refresh=ui.button(tr("Refresh folders and inspect")).clicked();close=ui.button(tr("Close")).clicked();
             } else if dialog.busy {
-                ui.spinner();ui.label("Checking and applying folder change…");close=ui.button("Stop waiting").clicked();
+                ui.spinner();ui.label(tr("Checking and applying folder change…"));close=ui.button(tr("Stop waiting")).clicked();
             } else {
                 let label=match dialog.change {Change::Create {..}=>"Create folder",Change::Rename {..}=>"Save folder name",Change::MovePlaylist {..}=>"Move playlist"};
-                ui.horizontal(|ui| {submit=ui.add_enabled(!self.buffering && dialog.change.validate().is_ok(),egui::Button::new(label)).clicked();close=ui.button("Cancel").clicked();});
+                ui.horizontal(|ui| {submit=ui.add_enabled(!self.buffering && dialog.change.validate().is_ok(),egui::Button::new(label)).clicked();close=ui.button(tr("Cancel")).clicked();});
             }
         });
         if submit {

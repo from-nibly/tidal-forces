@@ -100,5 +100,10 @@ fn mini_renders_at_minimum_and_normal_sizes_without_mutating_queue() {
 #[test]
 fn legacy_preferences_do_not_enable_tray_or_window_pinning() {
     let appearance: crate::store::Appearance = serde_json::from_str("{}").unwrap();
-    assert!(!appearance.tray_enabled && !appearance.mini_on_top && !appearance.radio_continuation);
+    assert!(
+        !appearance.tray_enabled
+            && !appearance.mini_on_top
+            && !appearance.radio_continuation
+            && !appearance.classic_skin
+    );
 }

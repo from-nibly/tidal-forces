@@ -167,12 +167,13 @@ impl App {
         }
         if details {
             ui.label(
-                RichText::new("Local to this account. Nothing is uploaded to TIDAL.").color(MUTED),
+                RichText::new(tr("Local to this account. Nothing is uploaded to TIDAL."))
+                    .color(theme_muted()),
             );
-            ui.label(RichText::new("After 30 seconds or half a short track. Pauses, seeks and buffering do not add listening time. Retains up to 1,000 plays for 90 days.").size(11.).color(MUTED));
+            ui.label(RichText::new(tr("After 30 seconds or half a short track. Pauses, seeks and buffering do not add listening time. Retains up to 1,000 plays for 90 days.")).size(11.).color(theme_muted()));
         }
         if self.account.is_none() {
-            ui.label("Sign in to view this account's history.");
+            ui.label(tr("Sign in to view this account's history."));
             return;
         }
         if self.listening.loading {
@@ -180,34 +181,37 @@ impl App {
             return;
         }
         if self.state_store.is_none() {
-            ui.label("History storage is unavailable.");
+            ui.label(tr("History storage is unavailable."));
             return;
         }
         if let Some(error) = self.listening.error.clone() {
-            ui.colored_label(Color32::LIGHT_RED, error);
-            if self.listening.state.is_some() && ui.button("Retry saving history").clicked() {
+            ui.colored_label(theme_error(), error);
+            if self.listening.state.is_some() && ui.button(tr("Retry saving history")).clicked() {
                 self.listening.saved_revision = None;
                 self.checkpoint_history(true);
-            } else if self.listening.state.is_none() && ui.button("Retry loading history").clicked()
+            } else if self.listening.state.is_none()
+                && ui.button(tr("Retry loading history")).clicked()
             {
                 self.request_history();
             }
         }
         if self.listening.confirm_clear {
-            ui.label("Delete this account's local listening records? Queue and TIDAL data stay unchanged.");
+            ui.label(tr("Delete this account's local listening records? Queue and TIDAL data stay unchanged."));
             if self
                 .listening
                 .state
                 .as_ref()
                 .is_some_and(|history| history.enabled)
             {
-                ui.label("Recording stays on; future listening can add new records.");
+                ui.label(tr(
+                    "Recording stays on; future listening can add new records.",
+                ));
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Confirm clear history").clicked() {
+                if ui.button(tr("Confirm clear history")).clicked() {
                     self.clear_history();
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel")).clicked() {
                     self.listening.confirm_clear = false;
                 }
             });
@@ -223,14 +227,14 @@ impl App {
         }
     }
     pub(super) fn history_panel(&mut self, ui: &mut egui::Ui) {
-        surfaces::section_title(ui, "Listening history");
+        surfaces::section_title(ui, tr("Listening history"));
         self.history_controls(ui, false);
         ui.separator();
         let mut play = None;
         let mut action = None;
         if let Some(history) = &self.listening.state {
             if history.entries.is_empty() {
-                ui.label("No recorded listening yet.");
+                ui.label(tr("No recorded listening yet."));
             }
             let now = crate::history::now();
             egui::ScrollArea::vertical()
@@ -251,7 +255,7 @@ impl App {
                                 play = Some((*entry.track).clone());
                             }
                             button
-                                .on_hover_text("Play this track")
+                                .on_hover_text(tr("Play this track"))
                                 .context_menu(|ui| track_menu(ui, &entry.track, &mut action));
                             ui.label(
                                 RichText::new(format!(
@@ -260,7 +264,7 @@ impl App {
                                     time(entry.listened_ms / 1000)
                                 ))
                                 .size(11.)
-                                .color(MUTED),
+                                .color(theme_muted()),
                             );
                         });
                     }
@@ -282,7 +286,7 @@ impl App {
         }
         ui.add_space(20.);
         ui.horizontal(|ui| {
-            surfaces::section_title(ui, "Recently listened");
+            surfaces::section_title(ui, tr("Recently listened"));
             if ui.small_button("View history").clicked() {
                 self.listening.show_panel = true;
                 self.queue_open = true;
@@ -297,7 +301,7 @@ impl App {
                 for entry in row {
                     ui.push_id((history.user, self.listening.request, entry.id), |ui| {
                         egui::Frame::new()
-                            .fill(PANEL)
+                            .fill(theme_panel())
                             .corner_radius(8)
                             .inner_margin(8)
                             .show(ui, |ui| {
@@ -355,30 +359,41 @@ fn recording_switch(ui: &mut egui::Ui, enabled: &mut bool) -> egui::Response {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     label.add(
-        egui::Label::new(RichText::new("Record listening history").size(13.))
+        egui::Label::new(RichText::new(tr("Record listening history")).size(13.))
             .truncate()
             .selectable(false),
     );
     let t = ui.ctx().animate_bool_responsive(response.id, *enabled);
-    ui.painter()
-        .rect_filled(pill, 10., if *enabled { ACCENT } else { BORDER });
+    ui.painter().rect_filled(
+        pill,
+        10.,
+        if *enabled {
+            theme_accent()
+        } else {
+            theme_border()
+        },
+    );
     ui.painter().circle_filled(
         pos2(
             egui::lerp((pill.left() + 10.)..=(pill.right() - 10.), t),
             pill.center().y,
         ),
         7.,
-        if *enabled { PANEL } else { MUTED },
+        if *enabled {
+            theme_panel()
+        } else {
+            theme_muted()
+        },
     );
     if response.has_focus() {
         ui.painter().rect_stroke(
             rect.expand(2.),
             4.,
-            Stroke::new(1.0_f32, ACCENT),
+            Stroke::new(1.0_f32, theme_accent()),
             egui::StrokeKind::Inside,
         );
     }
-    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Local to this account on this device; nothing is uploaded to TIDAL. Turning recording off keeps existing entries. Muted playback counts; pauses, seeks and buffering do not.")
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Local to this account on this device; nothing is uploaded to TIDAL. Turning recording off keeps existing entries. Muted playback counts; pauses, seeks and buffering do not."))
 }
 
 fn age(seconds: u64) -> String {

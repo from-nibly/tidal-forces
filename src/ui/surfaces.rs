@@ -39,9 +39,9 @@ pub(super) fn hero(
         92.
     };
     egui::Frame::new()
-        .fill(if framed { PLAYING } else { BG })
+        .fill(if framed { theme_playing() } else { theme_bg() })
         .stroke(if framed {
-            Stroke::new(1.0_f32, BORDER)
+            Stroke::new(1.0_f32, theme_border())
         } else {
             Stroke::NONE
         })
@@ -57,11 +57,13 @@ pub(super) fn hero(
                     ui.add_space(4.);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 6.;
-                        ui.label(RichText::new(kind).size(10.).strong().color(ACCENT));
+                        ui.label(RichText::new(kind).size(10.).strong().color(theme_accent()));
                         page_title(ui, title);
                         ui.add(
-                            egui::Label::new(RichText::new(subtitle).size(12.).color(MUTED))
-                                .truncate(),
+                            egui::Label::new(
+                                RichText::new(subtitle).size(12.).color(theme_muted()),
+                            )
+                            .truncate(),
                         )
                         .on_hover_text(subtitle);
                     });
@@ -76,7 +78,11 @@ pub(super) fn action_button(
     label: &str,
     primary: bool,
 ) -> egui::Response {
-    let color = if primary { BG } else { TEXT };
+    let color = if primary {
+        theme_on_accent()
+    } else {
+        theme_text()
+    };
     let galley = ui
         .painter()
         .layout_no_wrap(label.into(), egui::FontId::proportional(14.), color);
@@ -86,18 +92,18 @@ pub(super) fn action_button(
         rect,
         6.,
         if primary {
-            ACCENT
+            theme_accent()
         } else if response.hovered() {
-            PLAYING
+            theme_hover()
         } else {
-            CARD
+            theme_card()
         },
     );
     if response.has_focus() {
         ui.painter().rect_stroke(
             rect.expand(2.),
             8.,
-            Stroke::new(1.0_f32, ACCENT),
+            Stroke::new(1.0_f32, theme_accent()),
             egui::StrokeKind::Outside,
         );
     }
@@ -134,13 +140,13 @@ pub(super) fn track_tile(
         },
     );
     if response.hovered() && interactive {
-        ui.painter().rect_filled(rect, 6., CARD);
+        ui.painter().rect_filled(rect, 6., theme_card());
     }
     if response.has_focus() {
         ui.painter().rect_stroke(
             rect,
             6.,
-            Stroke::new(1.0_f32, ACCENT),
+            Stroke::new(1.0_f32, theme_accent()),
             egui::StrokeKind::Inside,
         );
     }
@@ -159,15 +165,23 @@ pub(super) fn track_tile(
                 RichText::new(&track.title)
                     .size(13.)
                     .strong()
-                    .color(if playing { ACCENT } else { TEXT }),
+                    .color(if playing {
+                        theme_accent()
+                    } else {
+                        theme_text()
+                    }),
             )
             .truncate()
             .selectable(false),
         );
         ui.add(
-            egui::Label::new(RichText::new(&track.artist.name).size(11.).color(MUTED))
-                .truncate()
-                .selectable(false),
+            egui::Label::new(
+                RichText::new(&track.artist.name)
+                    .size(11.)
+                    .color(theme_muted()),
+            )
+            .truncate()
+            .selectable(false),
         );
     });
     response.widget_info(|| {
@@ -279,8 +293,8 @@ pub(super) fn media_shelf_ordered<T>(
 
 pub(super) fn card(ui: &mut egui::Ui, width: f32, content: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0_f32, BORDER))
+        .fill(theme_panel())
+        .stroke(Stroke::new(1.0_f32, theme_border()))
         .corner_radius(10)
         .inner_margin(12)
         .show(ui, |ui| {

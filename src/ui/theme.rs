@@ -1,40 +1,92 @@
 use eframe::egui::{self, Color32, Stroke, vec2};
 
-pub(super) const BG: Color32 = Color32::from_rgb(12, 13, 15);
-pub(super) const PANEL: Color32 = Color32::from_rgb(18, 19, 22);
-pub(super) const CARD: Color32 = Color32::from_rgb(28, 30, 34);
-pub(super) const BORDER: Color32 = Color32::from_rgb(43, 47, 53);
-pub(super) const MUTED: Color32 = Color32::from_rgb(151, 155, 165);
-pub(super) const ACCENT: Color32 = Color32::from_rgb(81, 225, 219);
-pub(super) const PLAYING: Color32 = Color32::from_rgb(21, 37, 39);
-pub(super) const SELECTED: Color32 = Color32::from_rgb(20, 46, 48);
-pub(super) const TEXT: Color32 = Color32::from_rgb(241, 242, 245);
+use crate::palette::{Palette, Theme};
+use std::cell::Cell;
 
-pub(super) fn configure(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = BG;
-    visuals.window_fill = PANEL;
-    visuals.extreme_bg_color = PANEL;
-    visuals.faint_bg_color = CARD;
-    visuals.selection.bg_fill = Color32::from_rgb(25, 67, 67);
-    visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+thread_local! { static COLORS: Cell<Palette> = const { Cell::new(Palette::DARK) }; }
+
+pub(super) struct PaletteScope(Palette);
+impl Drop for PaletteScope {
+    fn drop(&mut self) {
+        COLORS.set(self.0);
+    }
+}
+fn color(rgb: [u8; 3]) -> Color32 {
+    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+macro_rules! tokens {
+    ($($name:ident => $field:ident),* $(,)?) => {$(
+        pub(super) fn $name() -> Color32 { color(COLORS.get().$field) }
+    )*};
+}
+tokens! {
+    theme_bg => bg, theme_panel => panel, theme_card => card, theme_border => border,
+    theme_muted => muted, theme_accent => accent, theme_playing => playing,
+    theme_selected => selected, theme_text => text, theme_hover => hover, theme_error => error,
+}
+pub(super) fn theme_scrim() -> Color32 {
+    let palette = COLORS.get();
+    let [r, g, b] = palette.bg;
+    Color32::from_rgba_unmultiplied(r, g, b, if palette.dark() { 80 } else { 230 })
+}
+pub(super) fn theme_on_accent() -> Color32 {
+    color(COLORS.get().on_accent())
+}
+
+pub(super) fn scope(ctx: &egui::Context, mode: Theme, custom: Palette) -> PaletteScope {
+    let palette = Palette::resolve(mode, ctx.system_theme() != Some(egui::Theme::Light), custom);
+    let previous = COLORS.replace(palette);
+    apply(ctx, palette);
+    PaletteScope(previous)
+}
+
+fn apply(ctx: &egui::Context, palette: Palette) {
+    ctx.set_theme(if palette.dark() {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
+    let id = egui::Id::new("tidal_semantic_palette");
+    if ctx.data(|data| data.get_temp::<Palette>(id)) == Some(palette) {
+        return;
+    }
+    let mut visuals = if palette.dark() {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.panel_fill = color(palette.bg);
+    visuals.window_fill = color(palette.panel);
+    visuals.extreme_bg_color = color(palette.panel);
+    visuals.faint_bg_color = color(palette.card);
+    visuals.selection.bg_fill = color(palette.selected);
+    visuals.selection.stroke = Stroke::new(1.0_f32, color(palette.accent));
     for (widget, fill) in [
-        (&mut visuals.widgets.inactive, CARD),
-        (&mut visuals.widgets.hovered, Color32::from_rgb(38, 44, 49)),
-        (&mut visuals.widgets.active, PLAYING),
+        (&mut visuals.widgets.inactive, palette.card),
+        (&mut visuals.widgets.hovered, palette.hover),
+        (&mut visuals.widgets.active, palette.playing),
     ] {
-        widget.bg_fill = fill;
-        widget.weak_bg_fill = fill;
-        widget.bg_stroke = Stroke::new(1.0_f32, BORDER);
+        widget.bg_fill = color(fill);
+        widget.weak_bg_fill = color(fill);
+        widget.bg_stroke = Stroke::new(1.0_f32, color(palette.border));
+        widget.fg_stroke.color = color(palette.text);
         widget.corner_radius = egui::CornerRadius::same(6);
     }
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, color(palette.accent));
     visuals.window_corner_radius = egui::CornerRadius::same(12);
-    visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
+    visuals.window_stroke = Stroke::new(1.0_f32, color(palette.border));
     visuals.slider_trailing_fill = true;
-    visuals.widgets.noninteractive.fg_stroke.color = MUTED;
-    visuals.override_text_color = Some(TEXT);
+    visuals.widgets.noninteractive.fg_stroke.color = color(palette.muted);
+    visuals.override_text_color = Some(color(palette.text));
+    visuals.weak_text_color = Some(color(palette.muted));
+    visuals.error_fg_color = color(palette.error);
+    visuals.hyperlink_color = color(palette.accent);
     ctx.set_visuals(visuals);
+    ctx.data_mut(|data| data.insert_temp(id, palette));
+}
+
+pub(super) fn configure(ctx: &egui::Context) {
+    apply(ctx, Palette::DARK);
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "Inter".into(),
@@ -54,7 +106,7 @@ pub(super) fn configure(ctx: &egui::Context) {
         vec!["Inter Bold".into()],
     );
     ctx.set_fonts(fonts);
-    ctx.style_mut(|style| {
+    ctx.all_styles_mut(|style| {
         style.spacing.item_spacing = vec2(12., 8.);
         style.spacing.button_padding = vec2(10., 6.);
         style

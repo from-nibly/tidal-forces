@@ -28,10 +28,10 @@ impl App {
             self.credentials.confirm_exit = true;
         }
         if self.credentials.confirm_exit {
-            egui::Window::new("Credential storage needs attention").collapsible(false).resizable(false).show(ctx, |ui| {
+            egui::Window::new(tr("Credential storage needs attention")).collapsible(false).resizable(false).show(ctx, |ui| {
                 ui.label(if self.credentials.busy { "Credential storage is still running. Wait before closing; interrupted sign-out may leave saved credentials in place." } else { "Closing can lose the newest sign-in credentials. Keep the app open and retry storage, or explicitly exit without them." });
-                if ui.button("Keep app open").clicked() { self.credentials.confirm_exit = false; }
-                if ui.button("Exit without waiting or saving").clicked() {
+                if ui.button(tr("Keep app open")).clicked() { self.credentials.confirm_exit = false; }
+                if ui.button(tr("Exit without waiting or saving")).clicked() {
                     self.credentials.allow_exit = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -53,7 +53,7 @@ impl App {
     }
     pub(super) fn credential_notice(&mut self, ui: &mut egui::Ui) {
         if self.credentials.dirty {
-            ui.colored_label(Color32::LIGHT_RED, "Current sign-in has not been confirmed in persistent storage. Keep the app open and retry saving before exit.");
+            ui.colored_label(theme_error(), tr("Current sign-in has not been confirmed in persistent storage. Keep the app open and retry saving before exit."));
         }
         let warning = self.credentials.warning.clone().or_else(|| {
             self.credentials
@@ -62,8 +62,8 @@ impl App {
                 .and_then(|result| result.as_ref().err().cloned())
         });
         if let Some(warning) = warning {
-            ui.colored_label(Color32::LIGHT_RED, warning);
-            if self.page != Page::Settings && ui.button("Credential settings").clicked() {
+            ui.colored_label(theme_error(), warning);
+            if self.page != Page::Settings && ui.button(tr("Credential settings")).clicked() {
                 self.navigate(Page::Settings);
                 self.settings_section = SettingsSection::Privacy;
             }
@@ -75,7 +75,7 @@ impl App {
     }
     pub(super) fn credential_controls(&mut self, ui: &mut egui::Ui) {
         ui.label(self.credential_label());
-        ui.label("Keyring protection depends on your desktop provider. Configure and unlock its default collection before migration; this app never opens automatic unlock prompts.");
+        ui.label(tr("Keyring protection depends on your desktop provider. Configure and unlock its default collection before migration; this app never opens automatic unlock prompts."));
         let storage = self
             .credentials
             .status
@@ -90,23 +90,23 @@ impl App {
         ui.add_enabled_ui(!self.credentials.busy, |ui| {
             if self.connected && legacy && cfg!(target_os = "linux") {
                 if self.credentials.confirm {
-                    ui.label("Move this sign-in to the OS keyring? The new copy is read-verified before the mode changes and the legacy file is removed. Older player versions cannot read this sign-in; do not run them against this profile after migration.");
+                    ui.label(tr("Move this sign-in to the OS keyring? The new copy is read-verified before the mode changes and the legacy file is removed. Older player versions cannot read this sign-in; do not run them against this profile after migration."));
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Confirm keyring migration").clicked() && let Some(user) = self.account {
+                        if ui.button(tr("Confirm keyring migration")).clicked() && let Some(user) = self.account {
                             self.credentials.confirm = false;
                             self.credential_request(Request::MigrateCredentials { user });
                         }
-                        if ui.button("Cancel").clicked() { self.credentials.confirm = false; }
+                        if ui.button(tr("Cancel")).clicked() { self.credentials.confirm = false; }
                     });
-                } else if ui.button("Move sign-in to OS keyring…").clicked() { self.credentials.confirm = true; }
+                } else if ui.button(tr("Move sign-in to OS keyring…")).clicked() { self.credentials.confirm = true; }
             }
             if self.connected {
-                if ui.button("Retry saving current sign-in").clicked() { self.credential_request(Request::RetryCredentialSave); }
-            } else if !signed_out && ui.button("Retry loading saved sign-in").clicked() { self.credential_request(Request::ReloadCredentials); }
-            if cleanup && ui.button("Retry saved-credential cleanup").clicked() { self.credential_request(Request::CleanupCredentials); }
+                if ui.button(tr("Retry saving current sign-in")).clicked() { self.credential_request(Request::RetryCredentialSave); }
+            } else if !signed_out && ui.button(tr("Retry loading saved sign-in")).clicked() { self.credential_request(Request::ReloadCredentials); }
+            if cleanup && ui.button(tr("Retry saved-credential cleanup")).clicked() { self.credential_request(Request::CleanupCredentials); }
             if ui.button(if self.connected { "Sign out and remove saved sign-in" } else { "Remove saved sign-in" }).clicked() { self.logout(); }
         });
-        ui.label("If deletion is blocked by a locked keyring, the signed-out marker prevents automatic sign-in while cleanup remains pending. Failed settings writes are reported and need retrying.");
+        ui.label(tr("If deletion is blocked by a locked keyring, the signed-out marker prevents automatic sign-in while cleanup remains pending. Failed settings writes are reported and need retrying."));
     }
 }
 

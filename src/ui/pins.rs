@@ -80,7 +80,7 @@ impl App {
                 .pins
                 .as_ref()
                 .is_some_and(|pins| self.account == Some(pins.user));
-        if ui.add_enabled(enabled,egui::Button::new(if pinned {"Unpin locally"} else {"Pin locally"})).on_hover_text("A shortcut on this device, for this account only. Does not change TIDAL favorites or folder order. Up to 64 playlists.").clicked() {self.toggle_pin(&id,&title);}
+        if ui.add_enabled(enabled,egui::Button::new(if pinned {"Unpin locally"} else {"Pin locally"})).on_hover_text(tr("A shortcut on this device, for this account only. Does not change TIDAL favorites or folder order. Up to 64 playlists.")).clicked() {self.toggle_pin(&id,&title);}
     }
     pub(super) fn pinned_playlists(&mut self, ui: &mut egui::Ui) {
         if !self.connected {
@@ -88,9 +88,9 @@ impl App {
         }
         if let Some(error) = self.pins_error.clone() {
             ui.label(
-                RichText::new("Local pins unavailable")
+                RichText::new(tr("Local pins unavailable"))
                     .size(12.)
-                    .color(MUTED),
+                    .color(theme_muted()),
             )
             .on_hover_text(error);
             if ui.small_button("Reload local pins").clicked() {
@@ -109,9 +109,9 @@ impl App {
             return;
         }
         ui.label(
-            RichText::new("PINNED · THIS DEVICE")
+            RichText::new(tr("PINNED · THIS DEVICE"))
                 .size(10.)
-                .color(MUTED)
+                .color(theme_muted())
                 .strong(),
         );
         let count = entries.len();
@@ -156,20 +156,20 @@ impl App {
                     }
                     let menu = ui.menu_button("⋯", |ui| {
                         if ui
-                            .add_enabled(index > 0, egui::Button::new("Move pin up"))
+                            .add_enabled(index > 0, egui::Button::new(tr("Move pin up")))
                             .clicked()
                         {
                             self.move_pin(&pin.id, true);
                             ui.close();
                         }
                         if ui
-                            .add_enabled(index + 1 < count, egui::Button::new("Move pin down"))
+                            .add_enabled(index + 1 < count, egui::Button::new(tr("Move pin down")))
                             .clicked()
                         {
                             self.move_pin(&pin.id, false);
                             ui.close();
                         }
-                        if ui.button("Unpin locally").clicked() {
+                        if ui.button(tr("Unpin locally")).clicked() {
                             self.toggle_pin(&pin.id, &pin.title);
                             ui.close();
                         }
@@ -181,7 +181,8 @@ impl App {
                             "Pinned playlist actions",
                         )
                     });
-                    menu.response.on_hover_text("Move or remove this local pin");
+                    menu.response
+                        .on_hover_text(tr("Move or remove this local pin"));
                 });
             });
         }

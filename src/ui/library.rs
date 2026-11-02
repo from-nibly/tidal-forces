@@ -6,7 +6,7 @@ impl App {
         ui.scope(|ui| {
             ui.spacing_mut().button_padding = vec2(9., 6.);
             ui.spacing_mut().interact_size.y = 32.;
-            ui.visuals_mut().selection.bg_fill = Color32::from_rgb(25, 52, 54);
+            ui.visuals_mut().selection.bg_fill = theme_selected();
             ui.horizontal_wrapped(|ui| {
                 for kind in FavoriteKind::ALL {
                     if ui
@@ -14,9 +14,9 @@ impl App {
                             self.page == Page::Library(kind),
                             RichText::new(kind.label()).size(12.).color(
                                 if self.page == Page::Library(kind) {
-                                    ACCENT
+                                    theme_accent()
                                 } else {
-                                    MUTED
+                                    theme_muted()
                                 },
                             ),
                         )
@@ -28,11 +28,11 @@ impl App {
                 if ui
                     .selectable_label(
                         self.page == Page::Playlists,
-                        RichText::new("Playlists & folders").size(12.).color(
+                        RichText::new(tr("Playlists & folders")).size(12.).color(
                             if self.page == Page::Playlists {
-                                ACCENT
+                                theme_accent()
                             } else {
-                                MUTED
+                                theme_muted()
                             },
                         ),
                     )
@@ -89,7 +89,7 @@ pub(super) fn favorite_button(
                     Icon::Down,
                     response.rect.right_top() + vec2(-4., 5.),
                     10.,
-                    MUTED,
+                    theme_muted(),
                 );
             }
             // A background membership read must not turn an in-progress menu
@@ -126,13 +126,13 @@ pub(super) fn favorite_button(
                             "Favorite actions"
                         })
                         .size(12.)
-                        .color(MUTED),
+                        .color(theme_muted()),
                     );
-                    if ui.button("Save to TIDAL favorites").clicked() {
+                    if ui.button(tr("Save to TIDAL favorites")).clicked() {
                         *action = Some((item, true));
                         ui.close();
                     }
-                    if ui.button("Remove from TIDAL favorites").clicked() {
+                    if ui.button(tr("Remove from TIDAL favorites")).clicked() {
                         *action = Some((item, false));
                         ui.close();
                     }

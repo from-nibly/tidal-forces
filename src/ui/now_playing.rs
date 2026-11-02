@@ -186,17 +186,17 @@ impl App {
         let mut radio = None;
         let mut artist = None;
         let mut album = None;
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(24)).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme_bg()).inner_margin(24)).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("NOW PLAYING").size(12.).color(ACCENT).strong());
+                ui.label(RichText::new(tr("NOW PLAYING")).size(12.).color(theme_accent()).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close = ui.button("Back · Esc").clicked();
+                    close = ui.button(tr("Back · Esc")).clicked();
                 });
             });
             ui.add_space(16.);
             let Some(track) = self.queue.current().cloned() else {
-                ui.heading("Choose a track to get started");
-                ui.label("Return to your library or search. Playback controls still use the same queue.");
+                ui.heading(tr("Choose a track to get started"));
+                ui.label(tr("Return to your library or search. Playback controls still use the same queue."));
                 return;
             };
             let width = ui.available_width();
@@ -208,8 +208,8 @@ impl App {
                     artwork(ui, track.cover_url(640), cover).context_menu(|ui| track_menu(ui, &track, &mut radio));
                     ui.add_space(14.);
                     ui.add(egui::Label::new(RichText::new(&track.title).size(22.).strong()).truncate()).on_hover_text(&track.title);
-                    if ui.add(egui::Label::new(RichText::new(&track.artist.name).color(ACCENT)).truncate().sense(egui::Sense::click())).on_hover_text("Open artist").clicked() { artist = Some(track.artist.id); }
-                    if ui.add(egui::Label::new(RichText::new(&track.album.title).color(MUTED)).truncate().sense(egui::Sense::click())).on_hover_text("Open album").clicked() { album = Some((track.album.id, track.album.title.clone())); }
+                    if ui.add(egui::Label::new(RichText::new(&track.artist.name).color(theme_accent())).truncate().sense(egui::Sense::click())).on_hover_text(tr("Open artist")).clicked() { artist = Some(track.artist.id); }
+                    if ui.add(egui::Label::new(RichText::new(&track.album.title).color(theme_muted())).truncate().sense(egui::Sense::click())).on_hover_text(tr("Open album")).clicked() { album = Some((track.album.id, track.album.title.clone())); }
                 });
                 ui.add_space(16.);
                 ui.allocate_ui_with_layout(vec2((width - left - 24.).max(120.), height), egui::Layout::top_down(egui::Align::Min), |ui| self.lyrics_panel(ui));
@@ -240,21 +240,23 @@ impl App {
         let mut retry = false;
         match &self.now_playing.state {
             State::Idle | State::Loading => {
-                ui.heading("Lyrics");
+                ui.heading(tr("Lyrics"));
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Checking TIDAL lyrics…");
+                    ui.label(tr("Checking TIDAL lyrics…"));
                 });
             }
             State::Missing => {
-                ui.heading("No lyrics available");
-                ui.label("TIDAL has no lyrics available for this track. Your music keeps playing.");
-                retry = ui.button("Retry lyrics").clicked();
+                ui.heading(tr("No lyrics available"));
+                ui.label(tr(
+                    "TIDAL has no lyrics available for this track. Your music keeps playing.",
+                ));
+                retry = ui.button(tr("Retry lyrics")).clicked();
             }
             State::Failed(message) => {
-                ui.heading("Lyrics unavailable");
+                ui.heading(tr("Lyrics unavailable"));
                 ui.label(message);
-                retry = ui.button("Retry lyrics").clicked();
+                retry = ui.button(tr("Retry lyrics")).clicked();
             }
             State::Ready(lyrics) => {
                 let supported = *self.now_playing.font_support.get_or_insert_with(|| {
@@ -270,31 +272,31 @@ impl App {
                         })
                 });
                 if !supported {
-                    ui.heading("Lyrics display unavailable");
+                    ui.heading(tr("Lyrics display unavailable"));
                     ui.label(if lyrics.right_to_left {
                         "TIDAL supplied right-to-left lyrics. This renderer cannot yet display that writing direction correctly."
                     } else {
                         "These lyrics contain characters unsupported by the bundled fonts."
                     });
-                    ui.label("Playback and Now Playing remain available. No other lyrics service was contacted.");
+                    ui.label(tr("Playback and Now Playing remain available. No other lyrics service was contacted."));
                     ui.add_space(12.);
                     ui.label(
                         RichText::new(format!("Lyrics via TIDAL · {}", lyrics.provider))
                             .size(11.)
-                            .color(MUTED),
+                            .color(theme_muted()),
                     );
                     return;
                 }
                 let synced = !lyrics.lines.is_empty();
                 let active = confirmed.then(|| lyrics.active(position)).flatten();
                 ui.horizontal(|ui| {
-                    ui.heading("Lyrics");
+                    ui.heading(tr("Lyrics"));
                     if synced {
                         if ui
-                            .selectable_label(self.now_playing.follow, "Follow")
-                            .on_hover_text(
+                            .selectable_label(self.now_playing.follow, tr("Follow"))
+                            .on_hover_text(tr(
                                 "Follow the confirmed playback position; scrolling pauses follow",
-                            )
+                            ))
                             .clicked()
                         {
                             self.now_playing.follow = true;
@@ -302,8 +304,8 @@ impl App {
                         }
                     } else {
                         ui.label(
-                            RichText::new("Plain text · no timing")
-                                .color(MUTED)
+                            RichText::new(tr("Plain text · no timing"))
+                                .color(theme_muted())
                                 .size(12.),
                         );
                     }
@@ -349,7 +351,11 @@ impl App {
                             && active.is_some_and(|active| {
                                 lyrics.lines[index].at == lyrics.lines[active].at
                             });
-                        let color = if highlighted { ACCENT } else { MUTED };
+                        let color = if highlighted {
+                            theme_accent()
+                        } else {
+                            theme_muted()
+                        };
                         let mut job = egui::text::LayoutJob::simple(
                             text.to_owned(),
                             egui::FontId::proportional(font_size),
@@ -392,10 +398,10 @@ impl App {
                 ui.label(
                     RichText::new(format!("Lyrics via TIDAL · {}", lyrics.provider))
                         .size(11.)
-                        .color(MUTED),
+                        .color(theme_muted()),
                 );
                 if lyrics.right_to_left {
-                    ui.label(RichText::new("Right-to-left text retained; complex-script font/shaping support is not yet verified.").size(10.).color(MUTED));
+                    ui.label(RichText::new(tr("Right-to-left text retained; complex-script font/shaping support is not yet verified.")).size(10.).color(theme_muted()));
                 }
             }
         }

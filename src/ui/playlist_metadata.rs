@@ -136,18 +136,18 @@ impl App {
         let mut save = false;
         let mut close = false;
         let mut refresh = false;
-        egui::Window::new("Edit playlist details")
+        egui::Window::new(tr("Edit playlist details"))
             .id(egui::Id::new("playlist-metadata"))
             .collapsible(false)
             .resizable(false)
             .default_width(360.)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Changes are saved to your TIDAL account.");
+                ui.label(tr("Changes are saved to your TIDAL account."));
                 ui.add_enabled_ui(!editor.busy && editor.error.is_none(), |ui| {
-                    ui.label("Name (1–100 characters)");
+                    ui.label(tr("Name (1–100 characters)"));
                     ui.add(egui::TextEdit::singleline(&mut editor.title).char_limit(100));
-                    ui.label("Description (up to 1,000 characters)");
+                    ui.label(tr("Description (up to 1,000 characters)"));
                     egui::ScrollArea::vertical()
                         .max_height(120.)
                         .show(ui, |ui| {
@@ -161,20 +161,20 @@ impl App {
                 });
                 if editor.busy {
                     ui.spinner();
-                    ui.label("Saving and verifying…");
+                    ui.label(tr("Saving and verifying…"));
                 } else if let Some(error) = &editor.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                    refresh = ui.button("Refresh before trying again").clicked();
-                    close = ui.button("Close").clicked();
+                    ui.colored_label(theme_error(), error);
+                    refresh = ui.button(tr("Refresh before trying again")).clicked();
+                    close = ui.button(tr("Close")).clicked();
                 } else {
                     ui.horizontal(|ui| {
                         let valid = !editor.title.trim().is_empty()
                             && editor.title.chars().count() <= 100
                             && editor.description.chars().count() <= 1000;
                         save = ui
-                            .add_enabled(valid, egui::Button::new("Save changes"))
+                            .add_enabled(valid, egui::Button::new(tr("Save changes")))
                             .clicked();
-                        close = ui.button("Cancel").clicked();
+                        close = ui.button(tr("Cancel")).clicked();
                     });
                 }
             });

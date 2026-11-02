@@ -62,6 +62,10 @@ pub(crate) fn save_bytes(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Res
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct Appearance {
+    #[serde(deserialize_with = "crate::palette::read_theme")]
+    pub theme: crate::palette::Theme,
+    #[serde(deserialize_with = "crate::palette::read_palette")]
+    pub palette: crate::palette::Palette,
     pub player_bar_visualizer: crate::visualizer::Mode,
     pub compact_rows: bool,
     pub zoom: f32,
@@ -70,12 +74,16 @@ pub struct Appearance {
     pub radio_continuation: bool,
     pub tray_enabled: bool,
     pub mini_on_top: bool,
+    #[serde(deserialize_with = "crate::skins::read_enabled")]
+    pub classic_skin: bool,
     pub dsp: crate::dsp::Settings,
     pub output: crate::output_devices::Target,
 }
 impl Default for Appearance {
     fn default() -> Self {
         Self {
+            theme: crate::palette::Theme::default(),
+            palette: crate::palette::Palette::default(),
             player_bar_visualizer: crate::visualizer::Mode::Off,
             compact_rows: false,
             zoom: 1.,
@@ -84,6 +92,7 @@ impl Default for Appearance {
             radio_continuation: false,
             tray_enabled: false,
             mini_on_top: false,
+            classic_skin: false,
             dsp: crate::dsp::Settings::default(),
             output: crate::output_devices::Target::SystemDefault,
         }
@@ -99,6 +108,9 @@ impl Appearance {
                     appearance.zoom = 1.;
                 }
                 appearance.dsp = appearance.dsp.validated();
+                if appearance.palette.validate().is_err() {
+                    appearance.palette = crate::palette::Palette::DARK;
+                }
                 match &mut appearance.output {
                     crate::output_devices::Target::Pulse(_, identity) => identity.clear(),
                     crate::output_devices::Target::RequireSelection => {
@@ -120,6 +132,21 @@ impl Appearance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_cosmetics_do_not_reset_playback_preferences() {
+        let value: Appearance = serde_json::from_value(serde_json::json!({
+            "theme": "future-mode", "palette": {"text": "invalid"}, "classic_skin": "invalid",
+            "output": "CompatibilityDefault", "zoom": 1.25, "compact_rows": true
+        }))
+        .unwrap();
+        assert!(value.theme == crate::palette::Theme::Dark);
+        assert_eq!(value.palette, crate::palette::Palette::DARK);
+        assert!(value.output == crate::output_devices::Target::CompatibilityDefault);
+        assert_eq!(value.zoom, 1.25);
+        assert!(value.compact_rows);
+        assert!(!value.classic_skin);
+    }
+
     #[test]
     fn legacy_preferences_default_to_os_routing() {
         let legacy: Appearance = serde_json::from_str(r#"{"zoom":1.0}"#).unwrap();
