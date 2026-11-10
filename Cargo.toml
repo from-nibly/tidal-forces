@@ -45,7 +45,7 @@ version = "=0.14.4"
 version = "=0.17.14"
 
 [dependencies.rustls]
-version = "=0.23.45"
+version = "=0.23.46"
 default-features = false
 features = ["ring", "std", "tls12"]
 
