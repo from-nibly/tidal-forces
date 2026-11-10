@@ -157,6 +157,7 @@ impl App {
                     self.mini_open = false;
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }
+                self.cast_button(ui, true);
                 if ui.button(tr("Player")).clicked() {
                     self.dispatch(Action::Raise, &ctx);
                 }
@@ -290,7 +291,7 @@ impl App {
         }
         // Classic balance has no independent DSP owner. The native settings remain authoritative.
         canvas.text(ui, [177., 57., 38., 13.], "DSP: EQ", 6.);
-        let mut volume = self.volume;
+        let mut volume = self.volume_target();
         let response = canvas.slider(ui, Bar::Volume, &mut volume, true);
         if response.changed() {
             self.dispatch(Action::Volume(volume), &ctx);
@@ -348,6 +349,7 @@ impl App {
             self.navigate(Page::Settings);
             self.dispatch(Action::Raise, &ctx);
         }
+        self.cast_picker(ui.ctx());
     }
 }
 

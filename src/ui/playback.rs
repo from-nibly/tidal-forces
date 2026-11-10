@@ -59,6 +59,10 @@ impl App {
     }
 
     pub(super) fn play_from(&mut self, position: Duration) {
+        if self.cast.enabled {
+            self.cast_start(position, true);
+            return;
+        }
         self.sync_next(true);
         let Some(track) = self.queue.current() else {
             return;
@@ -205,6 +209,10 @@ impl App {
     }
 
     pub(super) fn toggle(&mut self) {
+        if self.cast.enabled {
+            self.cast_toggle();
+            return;
+        }
         self.unavailable_skips = 0;
         if self.paused
             && let Some(epoch) = self.output_fault.take()
@@ -290,7 +298,11 @@ impl App {
         }
     }
     pub(super) fn advance(&mut self, natural: bool) {
-        if self.queue_mut().advance(natural) {
+        let advanced = self.queue_mut().advance(natural);
+        if !advanced && self.cast.enabled {
+            self.cast_stop();
+        }
+        if advanced {
             self.play_current();
         } else if self.queue.continuation().is_some() {
             self.play_generation = self.backend.player.reserve();
@@ -349,6 +361,7 @@ impl App {
             .stop("Source cleared. Start another source or explicitly re-enable recommendations.");
     }
     pub(super) fn stop_and_clear(&mut self) {
+        self.cast_stop();
         self.cancel_context();
         self.queue_mut().clear();
         self.play_generation = self.backend.player.reserve();
@@ -410,7 +423,7 @@ impl App {
                 self.position
                     .min(self.queue.current().map_or(0, |track| track.duration))
             },
-            volume: self.volume,
+            volume: self.cast.local_volume.unwrap_or(self.volume),
             quality: self.quality.clone(),
             location: self.location(),
         }

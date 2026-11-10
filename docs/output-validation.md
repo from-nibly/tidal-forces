@@ -55,6 +55,15 @@ temporary directory.
 **Never run all ignored tests.** Other ignored contracts can mutate an account.
 These contracts neither inspect real outputs nor establish physical-device behavior.
 
+## Private P7 handoff contracts
+
+The two native null-server contracts also exercise the production transfer-release path:
+wait for an acknowledged server flush, close the native stream, confirm no further
+synthetic PCM consumption and verify removal of the stream from the private server.
+Generation changes and failed acknowledgements cannot authorize a Cast LOAD. This
+is wired into the development native Cast target. Compatibility transfer fails
+closed; physical-device behavior is not established by these private tests.
+
 ## Runtime contract and limits (v0.32)
 
 - Native Linux output uses libpulse, including PipeWire's PulseAudio compatibility

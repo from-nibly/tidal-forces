@@ -12,6 +12,18 @@ mod audio_output;
 mod audio_tests;
 mod auth;
 mod backend;
+// Shared verifier also contains the standalone diagnostic entry point.
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/cast_auth/proof.rs"]
+mod cast_auth;
+mod cast_control;
+mod cast_discovery;
+mod cast_media;
+mod cast_source;
+#[cfg(test)]
+mod cast_stream_tests;
+#[cfg(test)]
+mod cast_target;
 mod credentials;
 mod dash;
 mod desktop;

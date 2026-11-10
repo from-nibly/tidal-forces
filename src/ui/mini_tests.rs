@@ -92,6 +92,13 @@ fn mini_renders_at_minimum_and_normal_sizes_without_mutating_queue() {
             },
         );
         assert!(!output.shapes.is_empty());
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape,egui::Shape::Rect(r) if r.rect.size()==vec2(21.,15.))),
+            "Mini player must expose the Cast control"
+        );
     }
     assert_eq!(app.queue.revision(), revision);
     assert!(requests.try_recv().is_err());

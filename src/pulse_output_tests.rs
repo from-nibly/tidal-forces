@@ -47,6 +47,57 @@ fn wait_for_sink(connection: &mut Connection, name: &str) {
     }
 }
 
+fn verify_transfer_release(output: &mut crate::audio_output::Output, connection: &mut Connection) {
+    output.reset(0.65).unwrap();
+    let consumed = Arc::new(AtomicUsize::new(0));
+    let counter = consumed.clone();
+    output.append(rodio::source::Zero::new(2, 48000).periodic_access(
+        Duration::from_millis(10),
+        move |_| {
+            counter.fetch_add(1, Ordering::AcqRel);
+        },
+    ));
+    output.pause(false);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while consumed.load(Ordering::Acquire) < 5 {
+        assert!(Instant::now() < deadline, "Private output did not start");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        output.quiesce_for_transfer(),
+        "Native flush must be acknowledged before transfer"
+    );
+    let stopped = consumed.load(Ordering::Acquire);
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        consumed.load(Ordering::Acquire),
+        stopped,
+        "No PCM may be produced after release"
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let count = Rc::new(RefCell::new(0));
+        let reply = count.clone();
+        let mut operation = connection
+            .context
+            .introspect()
+            .get_sink_input_info_list(move |info| {
+                if matches!(info, ListResult::Item(_)) {
+                    *reply.borrow_mut() += 1;
+                }
+            });
+        connection.wait(&mut operation).unwrap();
+        if *count.borrow() == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Released stream remained on private server"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 #[ignore = "Only tests/output-pipewire.py may supply the private null graph"]
 fn song_changes_on_private_pipewire() {
@@ -155,6 +206,7 @@ fn song_changes_on_private_pipewire() {
         output.stop();
         thread::sleep(Duration::from_millis(20));
     }
+    verify_transfer_release(&mut output, &mut admin);
 }
 
 #[test]
@@ -266,6 +318,7 @@ fn native_routing_on_private_null_server() {
                 "Changing sources must not fault an unchanged private output"
             );
         }
+        verify_transfer_release(&mut output, &mut connection);
     }
     let failed = Arc::new(AtomicBool::new(false));
     let driver = Driver::open(&target_a, failed.clone()).unwrap();

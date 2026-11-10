@@ -192,6 +192,17 @@ impl Output {
     pub fn failed(&self) -> bool {
         self.stream.is_some() && self.failed.load(Ordering::Acquire)
     }
+    pub fn quiesce_for_transfer(&mut self) -> bool {
+        let confirmed = match &self.stream {
+            None => true,
+            #[cfg(target_os = "linux")]
+            Some(Stream::Native(stream)) => !self.failed() && stream.quiesce_for_transfer().is_ok(),
+            // Compatibility output has no reviewed server-flush acknowledgement.
+            Some(Stream::Compatibility(_)) => false,
+        };
+        self.close();
+        confirmed
+    }
     pub fn close(&mut self) {
         self.sink.stop();
         self.sink = Sink::new().0;

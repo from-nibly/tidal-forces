@@ -143,9 +143,10 @@ impl App {
                 ui.label(RichText::new(tr("At narrow sizes the sidebar collapses to icons and the queue opens in a floating panel.")).color(theme_muted()));
             }
             SettingsSection::Playback => {
+                ui.label(tr("Choose a playback device using the Cast button on the player."));
+                ui.add_space(16.);
                 surfaces::section_title(ui, tr("Audio output"));
-                self.output_controls(ui);
-                ui.label(RichText::new(tr("Google Cast and TIDAL Connect are separate integrations. Neither is enabled in this release.")).color(theme_muted()));
+                ui.add_enabled_ui(!self.cast.enabled,|ui|self.output_controls(ui));
                 ui.add_space(20.);
                 surfaces::section_title(ui, tr("Listening quality"));
                 if self.auth_pkce {
@@ -157,7 +158,7 @@ impl App {
                 ui.radio_value(
                     &mut quality,
                     "LOSSLESS".into(),
-                    tr("Prefer lossless · AAC fallback when unavailable"),
+                    tr(if self.cast.enabled {"Lossless · no automatic Cast quality downgrade"} else {"Prefer lossless · AAC fallback when unavailable"}),
                 );
                 ui.radio_value(&mut quality, "HIGH".into(), tr("High · AAC"));
                 ui.radio_value(&mut quality, "LOW".into(), tr("Low · AAC"));
@@ -168,7 +169,7 @@ impl App {
                 }
                 ui.label(RichText::new(tr("Applies to the next track. The player reports the actual source format, not unverified hi-res or bit-perfect output.")).color(theme_muted()));
                 ui.add_space(20.);
-                self.dsp_controls(ui);
+                ui.add_enabled_ui(!self.cast.enabled,|ui|self.dsp_controls(ui));
             }
             SettingsSection::Privacy => {
                 self.metadata_cache_controls(ui);
@@ -225,7 +226,7 @@ impl App {
             SettingsSection::About => {
                 surfaces::section_title(ui, &format!("Tidal Forces {}", env!("CARGO_PKG_VERSION")));
                 ui.label(tr("Independent native Rust client. Not affiliated with TIDAL."));
-                ui.label(tr("Lossless is preferred; authorized AAC/HE-AAC remains supported. Encrypted audio and DRM circumvention are not supported."));
+                ui.label(tr(if self.cast.enabled {"Cast requires the selected quality and a supported clear DASH source. No automatic quality downgrade or DRM workaround."} else {"Lossless is preferred; authorized AAC/HE-AAC remains supported. Encrypted audio and DRM circumvention are not supported."}));
                 ui.label(tr("Use --licenses for notices and --export-fdk-source PATH for the bundled AAC codec source."));
                 ui.label(tr("Managed installations should be updated through Home Manager, not an in-app updater."));
             }

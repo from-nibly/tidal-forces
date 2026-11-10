@@ -99,6 +99,12 @@ fn skin_mode_keeps_quality_visible_and_does_not_create_a_playback_owner() {
     for size in [vec2(380., 250.), vec2(460., 260.), vec2(582., 340.)] {
         for _ in 0..2 {
             let (output, _) = draw(&ctx, &mut app, size, vec![]);
+            assert!(
+                output.shapes.iter().any(
+                    |s| matches!(&s.shape,egui::Shape::Rect(r) if r.rect.size()==vec2(21.,15.))
+                ),
+                "Classic player must expose the Cast control"
+            );
             let mut quality = false;
             for shape in output.shapes {
                 if let egui::Shape::Text(text) = shape.shape

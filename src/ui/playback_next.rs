@@ -30,6 +30,9 @@ impl App {
         self.queue = queue.into();
     }
     pub(super) fn sync_next(&mut self, cancel: bool) {
+        if self.cast.enabled {
+            return;
+        }
         if let Some(transition) = self.backend.player.reconcile_next(cancel) {
             self.accept_transition(transition);
         }
@@ -74,6 +77,9 @@ impl App {
         self.backend.player.pause(self.paused);
     }
     pub(super) fn prefetch_audio(&mut self) {
+        if self.cast.enabled {
+            return;
+        }
         self.sync_next(false);
         if self.paused || self.ended || self.audio_buffering() || self.actual_quality.is_empty() {
             if self.audio_buffering() || self.actual_quality.is_empty() {

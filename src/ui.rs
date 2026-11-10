@@ -19,6 +19,7 @@ mod album_load;
 #[cfg(test)]
 mod availability_tests;
 mod browse_cache;
+mod cast;
 mod credentials;
 mod export;
 mod favorite_cache;
@@ -82,6 +83,7 @@ struct Removal {
 }
 
 pub struct App {
+    cast: cast::Cast,
     instance: Option<Instance>,
     pending_link: Option<Link>,
     playlist_page: Option<PlaylistPage>,
@@ -258,6 +260,7 @@ impl App {
         backend.player.select_output(appearance.output.clone());
         let visualizer = Visualizer::new(appearance.player_bar_visualizer);
         Self {
+            cast: cast::Cast::default(),
             instance: None,
             pending_link: None,
             playlist_page: None,
@@ -420,7 +423,7 @@ impl App {
                 | Request::ReloadCredentials
                 | Request::CleanupCredentials
                 | Request::Logout => self.credentials.busy = false,
-                Request::Play { .. } => {
+                Request::Play { .. } | Request::CastPrepare { .. } => {
                     self.buffering = false;
                     self.paused = true;
                 }
@@ -674,6 +677,7 @@ impl App {
     }
 
     fn events(&mut self) {
+        self.cast_tick();
         if self
             .unavailable_expiry
             .is_some_and(|deadline| std::time::Instant::now() >= deadline)
@@ -683,7 +687,25 @@ impl App {
         }
         self.sync_next(false);
         while let Ok(event) = self.backend.rx.try_recv() {
+            if self.cast.enabled
+                && matches!(
+                    &event,
+                    Event::Playing { .. }
+                        | Event::StreamBuffering { .. }
+                        | Event::Listening { .. }
+                        | Event::Position { .. }
+                        | Event::Ended(_)
+                        | Event::PlaybackError { .. }
+                        | Event::TrackUnavailable { .. }
+                        | Event::TrackAvailable { .. }
+                        | Event::OutputLost { .. }
+                        | Event::OutputDetails(_)
+                )
+            {
+                continue;
+            }
             match event {
+                Event::CastPrepared {user,generation,result} => self.cast_prepared(user,generation,result),
                 Event::QueuePlaylistCreated {
                     user,
                     operation,
@@ -1297,6 +1319,10 @@ impl App {
     }
 
     fn seek_time(&mut self, position: std::time::Duration) {
+        if self.cast.enabled {
+            self.cast_seek(position);
+            return;
+        }
         self.sync_next(true);
         if self.buffering {
             return;
@@ -1677,7 +1703,7 @@ impl App {
         self.backend
             .player
             .visualizer
-            .enable(visible && self.visualizer.mode != Mode::Off);
+            .enable(visible && !self.cast.enabled && self.visualizer.mode != Mode::Off);
         let active = visible
             && !self.paused
             && !self.buffering
@@ -1698,13 +1724,15 @@ impl App {
                     ui.id().with("visualizer_toggle"),
                     egui::Sense::click(),
                 );
-                self.visualizer.paint(
-                    ui,
-                    rect,
-                    &self.backend.player.visualizer,
-                    active,
-                    self.queue.current().and_then(|t| t.cover_url(80)),
-                );
+                if !self.cast.enabled {
+                    self.visualizer.paint(
+                        ui,
+                        rect,
+                        &self.backend.player.visualizer,
+                        active,
+                        self.queue.current().and_then(|t| t.cover_url(80)),
+                    );
+                }
                 if self.visualizer.mode != Mode::Off {
                     ui.painter()
                         .rect_filled(rect, 0., theme_scrim());
@@ -1747,7 +1775,7 @@ impl App {
                                             )
                                             .truncate().sense(egui::Sense::click()),
                                         )
-                                        .on_hover_text(format!("{}\n{}\n{}\nOpen Playback settings", self.actual_quality, self.output_details, if self.appearance.dsp.enabled { "Local processing enabled; no bit-perfect claim." } else { "Local DSP bypass." })).clicked();
+                                        .on_hover_text(format!("{}\n{}\n{}\nOpen Playback settings", self.actual_quality, self.output_details, if self.cast.enabled { "Local DSP does not process Cast audio." } else if self.appearance.dsp.enabled { "Local processing enabled; no bit-perfect claim." } else { "Local DSP bypass." })).clicked();
                                     }
                                 });
                             } else {
@@ -1947,29 +1975,31 @@ impl App {
                                     );
                                 }
                             }
+                            self.cast_button(ui,false);
+                            let mut volume=self.volume_target();
                             if width >= 900. {
                                 ui.spacing_mut().slider_width = 55.;
                                 if ui
                                     .add(
-                                        egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                                        egui::Slider::new(&mut volume, 0.0..=1.0)
                                             .show_value(false),
                                     )
                                     .on_hover_text(tr("Volume"))
                                     .changed()
                                 {
-                                    self.backend.player.volume(self.volume);
+                                    self.playback_volume(volume);
                                 }
                                 icon_button(ui, Icon::Volume, tr("Volume"), false, 24.);
                             } else {
                                 ui.menu_button("Vol", |ui| {
                                     if ui
                                         .add(
-                                            egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                                            egui::Slider::new(&mut volume, 0.0..=1.0)
                                                 .text(tr("Volume")),
                                         )
                                         .changed()
                                     {
-                                        self.backend.player.volume(self.volume);
+                                        self.playback_volume(volume);
                                     }
                                 });
                             }
@@ -3106,6 +3136,9 @@ impl eframe::App for App {
         {
             self.quitting = false;
         }
+        if !background_close && !self.credential_close_pending() {
+            self.cast_close_guard(ctx, ctx.input(|input| input.viewport().close_requested()));
+        }
         if !background_close && ctx.input(|input| input.viewport().close_requested()) {
             self.cancel_folder_edit();
             self.cancel_delete_playlist();
@@ -3117,6 +3150,7 @@ impl eframe::App for App {
             self.stop_favorite_cache("Saved-status check stopped.");
         }
         if self.now_playing.open
+            && !self.cast_picker_open(ctx)
             && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -3135,7 +3169,7 @@ impl eframe::App for App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowRight)) {
             self.history(true);
         }
-        if !ctx.wants_keyboard_input() {
+        if !ctx.wants_keyboard_input() && !self.cast_picker_open(ctx) {
             if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::L)) {
                 self.open_now_playing(ctx);
             }
@@ -3202,7 +3236,11 @@ impl eframe::App for App {
         self.album_load_tick();
         self.favorite_cache_tick();
         self.queue_drag_cursor(ctx);
+        self.cast_picker(ctx);
         self.mini_window(ctx);
+        if !self.mini_open {
+            self.cast_mini_closed();
+        }
         if let Some(deadline) = self.appearance_save {
             let now = std::time::Instant::now();
             if now >= deadline && !ctx.input(|input| input.pointer.any_down()) {

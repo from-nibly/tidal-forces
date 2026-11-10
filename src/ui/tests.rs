@@ -24,6 +24,7 @@ pub(super) fn fixture() -> (
             ..Default::default()
         },
     );
+    app.cast.discovery_disabled = true;
     app.connected = true;
     app.account = Some(7);
     app.country = "US".into();

@@ -75,6 +75,7 @@ impl App {
                 && ctx.input(|input| input.viewport().close_requested())
             {
                 self.mini_open = false;
+                self.cast_mini_closed();
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
                 return;
             }
@@ -123,6 +124,7 @@ impl App {
                             let repeat = self.queue.repeat().next(); self.queue_mut().set_repeat(repeat);
                         }
                     });
+                    self.cast_button(ui,true);
                     if ui.button(tr("Player")).on_hover_text(tr("Show the main player")).clicked() { self.dispatch(Action::Raise, &ctx); }
                 });
             });
@@ -154,7 +156,7 @@ impl App {
                 if self.audio_buffering() { ui.add(egui::Spinner::new().size(14.)); }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().slider_width = (ui.available_width() - 24.).clamp(35., 85.);
-                    let mut volume = self.volume;
+                    let mut volume = self.volume_target();
                     if ui.add(egui::Slider::new(&mut volume, 0. ..=1.).show_value(false)).on_hover_text(tr("Volume")).changed() { self.dispatch(Action::Volume(volume), &ctx); }
                     ui.label(RichText::new(tr("Vol")).size(10.).color(theme_muted()));
                 });
@@ -175,5 +177,6 @@ impl App {
                 self.dispatch(Action::Raise, &ctx);
             }
         });
+        self.cast_picker(ui.ctx());
     }
 }

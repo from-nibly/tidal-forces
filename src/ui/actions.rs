@@ -9,6 +9,7 @@ impl App {
         );
         match action {
             Action::Play if self.paused => self.toggle(),
+            Action::Pause if !self.paused && self.cast.enabled => self.cast_pause(true),
             Action::Pause if !self.paused => {
                 self.sync_next(true);
                 self.next_attempt = None;
@@ -31,11 +32,10 @@ impl App {
                 });
             }
             Action::Volume(value) if value.is_finite() => {
-                self.volume = value.clamp(0., 1.);
-                self.backend.player.volume(self.volume);
+                self.playback_volume(value);
             }
             Action::VolumeBy(delta) if delta.is_finite() => {
-                self.dispatch(Action::Volume(self.volume + delta), ctx)
+                self.dispatch(Action::Volume(self.volume_target() + delta), ctx)
             }
             Action::NowPlaying => {
                 self.open_now_playing(ctx);

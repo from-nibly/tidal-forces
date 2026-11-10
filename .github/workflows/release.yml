@@ -26,7 +26,7 @@ jobs:
       - name: Install native build and smoke-test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libasound2-dev libpulse-dev pulseaudio libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus
+          sudo apt-get install -y build-essential libasound2-dev libpulse-dev pulseaudio libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus openssl
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -39,6 +39,11 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests
         run: cargo test --locked
+      - name: Offline Cast framing and authentication proofs
+        run: |
+          cargo test --locked --example cast_frame_probe
+          cargo test --locked --example cast_auth_probe
+          python3 tests/cast-auth.py
       - name: Single-instance URI activation
         run: dbus-run-session -- cargo test --locked single_instance_forwards_links_and_activation -- --ignored
       - name: Secret Service migration and recovery contract

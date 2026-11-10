@@ -12,6 +12,14 @@ use std::{
 use tokio::sync::mpsc as async_mpsc;
 
 pub enum Request {
+    CastPrepare {
+        user: u64,
+        generation: u64,
+        id: u64,
+        quality: String,
+        position: Duration,
+        autoplay: bool,
+    },
     Recommendations {
         user: u64,
         serial: u64,
@@ -188,6 +196,11 @@ pub enum Request {
 }
 
 pub enum Event {
+    CastPrepared {
+        user: u64,
+        generation: u64,
+        result: Result<(crate::cast_control::Media, String), String>,
+    },
     Recommendations {
         user: u64,
         serial: u64,
@@ -477,6 +490,19 @@ impl Backend {
                             let playback_generation = match &request { Request::Play { generation, .. } | Request::SeekBuffered { generation, .. } => Some(*generation), _ => None };
                             let result: anyhow::Result<()> = async {
                                 match request {
+                                    Request::CastPrepare {user,generation,id,quality,position,autoplay} => {
+                                        let prepared: anyhow::Result<_> = async {
+                                            anyhow::ensure!(audio.current(generation) && api.session.as_ref().is_some_and(|s|s.user_id==user), "Cast playback context changed");
+                                            let stream=api.stream(id,&quality).await.map_err(|_|anyhow::anyhow!("Could not authorize this TIDAL stream for Cast"))?;
+                                            anyhow::ensure!(audio.current(generation) && api.session.as_ref().is_some_and(|s|s.user_id==user), "Cast playback context changed");
+                                            anyhow::ensure!(stream.quality==quality,"Returned quality differs from requested quality; no downgrade");
+                                            let crate::api::StreamSource::Dash(manifest)=stream.source else { anyhow::bail!("This stream is not a reviewed clear DASH source; no fallback"); };
+                                            let document=crate::cast_source::full(&manifest.xml,&manifest)?;
+                                            let description=format!("Cast · manifest {} / {} Hz · receiver output unknown · local DSP bypassed",manifest.codec.label(),manifest.sample_rate);
+                                            Ok((crate::cast_control::Media {metadata:Default::default(),xml:document.xml,duration:document.duration,position:position.min(document.duration.saturating_sub(Duration::from_secs(1))),autoplay},description))
+                                        }.await;
+                                        events.send(Event::CastPrepared {user,generation,result:prepared.map_err(|e|e.to_string())});
+                                    }
                                     Request::Recommendations { user, serial, id, mut cancel } => {
                                         if !matches!(cancel.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) { return Ok(()); }
                                         if let Some(job) = recommendation_job.take() { job.abort(); }

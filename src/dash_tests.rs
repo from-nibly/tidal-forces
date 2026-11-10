@@ -5,6 +5,19 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+#[test]
+fn authorized_manifest_is_shared_in_memory_and_debug_redacts_urls() {
+    let xml = r#"<MPD type="static"><Period><AdaptationSet><Representation codecs="flac" audioSamplingRate="44100"><SegmentTemplate timescale="1" initialization="https://audio.tidal.com/private-init?token=private-key" media="https://audio.tidal.com/private-$Number$?token=private-key"><SegmentTimeline><S d="1"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#;
+    let manifest = parse(xml).unwrap();
+    assert_eq!(manifest.xml.as_ref(), xml);
+    let copy = manifest.clone();
+    assert!(Arc::ptr_eq(&manifest.xml, &copy.xml));
+    let debug = format!("{manifest:?} {:?}", manifest.segments);
+    for value in ["private-", "https://", "<MPD", "token="] {
+        assert!(!debug.contains(value));
+    }
+}
+
 fn collect_pcm(source: impl Source<Item = f32> + Send + 'static) -> Vec<f32> {
     let (mut pcm, feedback) = crate::pcm::Pool::default().start(Box::new(source)).unwrap();
     let activity = feedback.activity();
@@ -125,6 +138,7 @@ impl FixtureServer {
             })
             .collect();
         Manifest {
+            xml: Arc::from(""),
             codec: Codec::Flac,
             init: format!("http://{}/0.mp4", self.address),
             segments,

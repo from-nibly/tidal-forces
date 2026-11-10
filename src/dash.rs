@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::sync::watch;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Segment {
     pub url: String,
     pub start: Duration,
@@ -45,13 +45,36 @@ impl Codec {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Manifest {
+    // Retain the authorized document in memory for direct receiver delivery.
+    // Never persist it or include it in diagnostics: it contains signed media URLs.
+    pub(crate) xml: Arc<str>,
     pub codec: Codec,
     pub init: String,
     pub segments: Vec<Segment>,
     pub sample_rate: u32,
     pub duration: Duration,
+}
+
+impl std::fmt::Debug for Segment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Segment")
+            .field("start", &self.start)
+            .field("duration", &self.duration)
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for Manifest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manifest")
+            .field("manifest_bytes", &self.xml.len())
+            .field("codec", &self.codec)
+            .field("segments", &self.segments.len())
+            .field("sample_rate", &self.sample_rate)
+            .field("duration", &self.duration)
+            .finish_non_exhaustive()
+    }
 }
 
 pub fn parse(xml: &str) -> Result<Manifest> {
@@ -159,6 +182,7 @@ pub fn parse(xml: &str) -> Result<Manifest> {
     }
     ensure!(!segments.is_empty(), "Empty DASH timeline");
     Ok(Manifest {
+        xml: Arc::from(xml),
         codec,
         init,
         segments,

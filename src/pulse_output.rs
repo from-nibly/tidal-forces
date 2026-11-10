@@ -188,6 +188,7 @@ pub struct Driver {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     flush: Arc<AtomicU64>,
+    flush_completed: Arc<AtomicU64>,
     worker: Option<thread::JoinHandle<()>>,
 }
 impl Driver {
@@ -201,6 +202,8 @@ impl Driver {
         let paused = Arc::new(AtomicBool::new(true));
         let flush = Arc::new(AtomicU64::new(0));
         let worker_flush = flush.clone();
+        let flush_completed = Arc::new(AtomicU64::new(0));
+        let worker_flush_completed = flush_completed.clone();
         let (mixer, source) = rodio::mixer::mixer(CHANNELS, RATE);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let worker_stop = stop.clone();
@@ -218,6 +221,7 @@ impl Driver {
                             &worker_paused,
                             &worker_failed,
                             &worker_flush,
+                            &worker_flush_completed,
                             &worker_selection,
                             &worker_selection_failed,
                         )
@@ -239,6 +243,7 @@ impl Driver {
                 stop,
                 paused,
                 flush,
+                flush_completed,
                 worker: Some(worker),
             }),
             _ => {
@@ -257,6 +262,20 @@ impl Driver {
     }
     pub fn pause(&self, paused: bool) {
         self.paused.store(paused, Ordering::Release);
+    }
+    pub fn quiesce_for_transfer(&self) -> Result<()> {
+        self.paused.store(true, Ordering::Release);
+        let serial = self.flush.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        ensure!(serial != 0, "Output flush serial exhausted");
+        let deadline = Instant::now() + TIMEOUT + Duration::from_secs(2);
+        while self.flush_completed.load(Ordering::Acquire) != serial {
+            ensure!(
+                Instant::now() < deadline,
+                "Local output flush was not confirmed"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
     }
 }
 impl Drop for Driver {
@@ -376,6 +395,7 @@ impl Session {
         paused: &AtomicBool,
         failed: &AtomicBool,
         flush: &AtomicU64,
+        flush_completed: &AtomicU64,
         selection: &Mutex<Option<Target>>,
         selection_failed: &AtomicBool,
     ) -> Result<()> {
@@ -412,6 +432,7 @@ impl Session {
             if let Some(operation) = &mut flush_operation {
                 if operation.get_state() == pulse::operation::State::Done {
                     ensure!(flush_result.borrow_mut().take() == Some(true), "{ERROR}");
+                    flush_completed.store(flush_seen, Ordering::Release);
                     flush_operation = None;
                 } else {
                     ensure!(Instant::now() < flush_deadline, "{ERROR}");

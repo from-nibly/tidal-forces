@@ -21,6 +21,22 @@ pub fn print() {
         include_str!("../assets/licenses/NIX.txt")
     );
     println!(
+        "\nNative Cast schemas/trust provenance (Open Screen)\n{}\nProtobuf (prost)\n{}\nX.509 parser (MIT option)\n{}\nTLS (rustls, MIT option)\n{}\nPKI types (MIT option)\n{}\nWebPKI\n{}\nRing\n{}\n{}\n{}",
+        include_str!("../assets/licenses/cast/OPENSCREEN.txt"),
+        include_str!("../assets/licenses/cast/PROST.txt"),
+        include_str!("../assets/licenses/cast/X509-PARSER.txt"),
+        include_str!("../assets/licenses/cast/RUSTLS.txt"),
+        include_str!("../assets/licenses/cast/RUSTLS-PKI-TYPES.txt"),
+        include_str!("../assets/licenses/cast/WEBPKI.txt"),
+        include_str!("../assets/licenses/cast/RING.txt"),
+        include_str!("../assets/licenses/cast/RING-BORINGSSL.txt"),
+        include_str!("../assets/licenses/cast/RING-OTHER.txt")
+    );
+    println!(
+        "\nNative DNS-SD discovery (mdns-sd, MIT option)\n{}",
+        include_str!("../assets/licenses/cast/MDNS-SD.txt")
+    );
+    println!(
         "Complete bundled FDK source: run --export-fdk-source PATH to extract the original fdk-aac-sys-0.5.0.crate (gzip tar archive). The Rust application source and Cargo.lock are available at https://github.com/from-nibly/tidal-forces."
     );
 }

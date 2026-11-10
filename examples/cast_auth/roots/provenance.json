@@ -1,0 +1,17 @@
+{
+  "commit": "784bb6902132df45fad06638d4c88c273e6eed9f",
+  "roots": {
+    "cast.der": {
+      "source": "cast_root_ca_cert_der-inc.h",
+      "sha256": "809af14700b3fe2611ad597eb1584d6354313b64ccdb3390f097fa3e5826d6ca"
+    },
+    "eureka.der": {
+      "source": "eureka_root_ca_der-inc.h",
+      "sha256": "caf6d1e37b532203e01a76bf07187bb731ccd38801565ab2211a2c0ab7f3bc46"
+    },
+    "crl.der": {
+      "source": "cast_crl_root_ca_cert_der-inc.h",
+      "sha256": "8b77c60291f9d62764613083f49750b1c5caac2d9efbe5a28edf301f9d84831d"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: v0.32.0 P5 is published and installed. P6 v0.33.0 passed native review and is approved for publication and installation. P7 planning is requested; implementation is not yet authorized.**
+**Status: P7 Google Cast v0.34.0 is approved for publication and managed installation.** [Player controls](cast-player-controls.md) include native streaming discovery, main/mini/classic Cast picker, track/artwork metadata and shared queue/transport routing with acknowledged local release and honest capability limits. Private verification and scoped receiver codec/seek/natural-completion evidence are documented in [native validation](cast-native-validation.md); discovery now passes after the separate narrow host firewall fix. Final-build receiver artwork/continuous-queue validation remains unperformed, explicitly disclosed in [release notes](releases/v0.34.0.md). P6 v0.33.0 remains installed until the approved artifact deployment completes. TIDAL Connect remains separate. Approval does not authorize new audible/device/account-mutation tests.
 
 The operator requested one version for the entire remaining P4 scope, not more
 incremental releases. The bundle includes output selection/preferences and route-loss
@@ -1242,7 +1242,7 @@ partner access. This is sequencing guidance, not authorization to delegate work.
 | P2 — queue, state & privacy | Occurrence-aware queue, manual/context separation, full-context pagination, reorder/clear/save, repeat-one/shuffle, paused restore, local history, keyring migration. | Play all continues beyond the first loaded page; duplicate-occurrence and restart/crash/account-isolation tests pass; locked-keyring recovery preserves credentials; no audio starts on launch. |
 | V1 — dedicated native visual polish (after P2, user-prioritized) | Bring the implemented shell, Home/Library cards, track tables, Queue/History and player bar toward the approved dark/teal design; cohesive hierarchy, spacing, typography and responsive interaction states. | Native layout/keyboard tests and review at minimum, normal and high-zoom sizes. No mock-only controls or claims that future lyrics/Now Playing/mini-player features exist. Runs before P3 and broader P4/P5 work. |
 | P3 — account organization | Multi-select, clipboard, playlist metadata and safe reordering, local pins, filter/sort, caching; gated folder/cover operations. | Temporary-object live round trips and cleanup; stale ETag, video holes, unavailable rows and partial-write failures covered. Unsupported mutations absent from UI. |
-| P4 — audio polish | Prepared-next playback, gapless where supported, ramps, local output selection/recovery, optional DSP and verified normalization. | Boundary/seek/pause tests across FLAC and AAC variants; bypass sample checks; no blocking capture/DSP allocations on callback; no surprise speaker fallback. |
+| P4 — audio polish | Prepared-next playback, gapless where supported, ramps, local output selection/recovery, optional DSP and verified normalization. | Boundary/seek/pause tests across FLAC and AAC variants; bypass sample checks; no blocking capture/DSP allocations on callback; OS-managed local routing and explicit stream-failure recovery (operator policy). |
 | P5 — lyrics & daily-use surfaces | Artwork-click full-screen Now Playing (large cover left, TIDAL-first lyrics right), branded mini player, opt-in tray, shared CLI commands, bounded radio continuation. | No lyrics drawer; Esc restores prior page/scroll/selection/panel; missing/unsynced lyrics graceful; seek/follow works; all controls target one player state; no duplicate history; no new external hosts without consent. |
 | G1 — Google Cast output | Native Cast sender and Devices UI; authorized media-delivery proof on Chromecast Audio, then the regular Chromecast. | P2/P4 playback-target boundary ready; both devices' control/quality/lifecycle results recorded; no local fallback or leaked credentials; precise limitations disclosed. Independent of C1. |
 | C1 — Connect implementation, conditional | Native discovery/controller + Devices UI using the established playback boundary. | P0 feasibility passed, P2/P4 state/output boundary stable, real hardware lifecycle tests passed. Unsupported remote operations remain unavailable. |
@@ -1306,8 +1306,9 @@ Confirmed user decisions:
 
 Open decisions:
 
-1. Should lyrics remain TIDAL-only, or may an explicitly enabled LRCLIB fallback
-   send track/artist/album lookup metadata to that third party?
+Lyrics are resolved: TIDAL-only, with no external fallback.
+
+1. Review the [P7 proposal](p7-cast-plan.md): use the next phase for gated Google Cast.
 2. The Chromecast direction is resolved. Confirm model/generation/firmware and
    an appropriate audible-test window when implementation reaches G1. An actual
    TIDAL Connect receiver and eligible integration route remain unidentified for C1.

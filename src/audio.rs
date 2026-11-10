@@ -176,6 +176,13 @@ impl NextOutput<'_> {
     }
 }
 
+fn release_if_current(current: &AtomicU64, expected: u64, release: impl FnOnce() -> bool) -> bool {
+    if current.load(Ordering::SeqCst) != expected {
+        return false;
+    }
+    release() && current.load(Ordering::SeqCst) == expected
+}
+
 enum Command {
     Load(
         u64,
@@ -197,6 +204,7 @@ enum Command {
     SelectOutput(crate::output_devices::Target),
     #[cfg(test)]
     FailOutput,
+    Quiesce(u64, mpsc::SyncSender<bool>),
     Stop,
 }
 
@@ -519,6 +527,12 @@ impl Player {
                         volume = v;
                         output.volume(v);
                     }
+                    Ok(Command::Quiesce(expected, reply)) => {
+                        let confirmed = release_if_current(&current, expected, || {
+                            output.quiesce_for_transfer()
+                        });
+                        let _ = reply.try_send(confirmed);
+                    }
                     Ok(Command::Stop) => {
                         capture.playing(false);
                         if let Some(frame) = active.take() {
@@ -648,6 +662,12 @@ impl Player {
         self.visualizer.invalidate();
         let _ = self.tx.send(Command::Stop);
         id
+    }
+    pub fn quiesce_for_transfer(&self) -> (u64, mpsc::Receiver<bool>) {
+        let generation = self.reserve();
+        let (reply, confirmation) = mpsc::sync_channel(1);
+        let _ = self.tx.send(Command::Quiesce(generation, reply));
+        (generation, confirmation)
     }
     fn discard_state(&self, state: NextState) {
         state.request.boundary.force_cancel();
@@ -1054,6 +1074,53 @@ mod resume_tests {
         samples
     }
 
+    #[test]
+    fn transfer_requires_an_explicit_generation_bound_output_ack() {
+        let mut player = Player::inert();
+        let (tx, rx) = mpsc::channel();
+        player.tx = tx;
+        let (generation, confirmation) = player.quiesce_for_transfer();
+        assert!(matches!(rx.recv().unwrap(), Command::Stop));
+        assert!(matches!(
+            confirmation.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        let Command::Quiesce(expected, reply) = rx.recv().unwrap() else {
+            panic!("Expected quiescence request")
+        };
+        assert_eq!(generation, expected);
+        let mut output = crate::audio_output::Output::default();
+        assert!(release_if_current(&player.generation, expected, || output
+            .quiesce_for_transfer()));
+        reply.try_send(true).unwrap();
+        assert!(confirmation.recv().unwrap());
+        assert!(player.current(generation));
+        player.reserve();
+        assert!(!player.current(generation));
+        assert!(!release_if_current(
+            &player.generation,
+            expected,
+            || panic!("Stale handoff must not close newer output")
+        ));
+    }
+    #[test]
+    fn absent_audio_worker_never_confirms_transfer() {
+        let player = Player::inert();
+        let (_, confirmation) = player.quiesce_for_transfer();
+        assert!(matches!(
+            confirmation.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+    #[test]
+    fn generation_change_during_release_cannot_confirm_a_stale_transfer() {
+        let current = AtomicU64::new(1);
+        assert!(!release_if_current(&current, 1, || {
+            current.store(2, Ordering::SeqCst);
+            true
+        }));
+        assert!(!release_if_current(&current, 2, || false));
+    }
     #[tokio::test]
     async fn buffered_seek_reuses_decoder_and_stop_discards_its_scope() {
         let mut player = Player::inert();

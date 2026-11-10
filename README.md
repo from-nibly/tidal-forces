@@ -38,6 +38,23 @@ The graphical player requires a desktop session D-Bus for single-instance
 activation and system media controls. The executable is
 not fully static and does not depend on a Nix store closure.
 
+## P7 Google Cast (v0.34)
+
+Version **0.34.0** adds a native Cast button and live device picker to the main,
+mini and classic players. Select a named Chromecast or **This computer**, without
+entering addresses or configuring certificates. Cast uses the existing queue,
+shuffle/repeat and shared transport controls; track and artwork metadata accompany
+each load. Returning locally stops the owned session first and remains paused.
+
+Clear reviewed DASH sources up to fifteen minutes per track are supported without
+a relay or transcoding. Actual TIDAL FLAC, AAC-LC and HE-AAC at44.1kHz passed scoped
+receiver pause/seeking tests. Receiver output format is unknown; local DSP and
+visualization do not apply. There is no automatic reconnect, local playback fallback
+or quality downgrade. Discovery requires local-network mDNS (UDP5353); the app does
+not change firewall rules. See [player controls](docs/cast-player-controls.md) and
+[release scope/validation limits](docs/releases/v0.34.0.md). Genuine TIDAL Connect
+remains separate.
+
 ## P6 appearance (v0.33)
 
 Version **0.33.0** adds
@@ -221,9 +238,8 @@ pages. Filter/sort, selection and metadata-edit tools remain P3 work.
 The [implementation roadmap](docs/feature-plan.md) remains staged. Native visual
 review preceded the library/playlist power tools and P4 audio bundle. P5
 lyrics/Now Playing and mini/tray controls shipped in v0.32; P6 appearance follows
-in v0.33. Google Cast remains pending. Genuine TIDAL
-Connect remains separately gated; there is no network discovery or laptop receiver
-enabled.
+in v0.33. Native Google Cast discovery and sender controls ship in v0.34.
+Genuine TIDAL Connect remains separately gated; the laptop is not a Cast receiver.
 
 ## P3a track selection (v0.9.0)
 
