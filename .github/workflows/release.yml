@@ -24,9 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install native build and smoke-test dependencies
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libasound2-dev libpulse-dev pulseaudio libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus openssl
+          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60)
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install -y build-essential libasound2-dev libpulse-dev pulseaudio libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev xvfb dbus openssl
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
