@@ -120,6 +120,73 @@ pub(crate) fn capture(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn measure_cast_picker(args: &[String]) -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mode = args.first().map(String::as_str).unwrap_or("closed");
+    anyhow::ensure!(
+        ["closed", "empty", "ready"].contains(&mode),
+        "Use closed, empty or ready"
+    );
+    let seconds = args.get(1).map_or(Ok(8u64), |s| s.parse())?;
+    anyhow::ensure!(
+        (4..=30).contains(&seconds),
+        "Probe duration must be4..30seconds"
+    );
+    struct Probe {
+        app: App,
+        frames: Arc<AtomicUsize>,
+        _worker: Option<std::sync::mpsc::SyncSender<()>>,
+    }
+    impl eframe::App for Probe {
+        fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+            input.events.clear();
+            input.modifiers = egui::Modifiers::NONE;
+            input.focused = false;
+        }
+        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+            self.frames.fetch_add(1, Ordering::Relaxed);
+            self.app.update(ctx, frame);
+        }
+    }
+    let frames = Arc::new(AtomicUsize::new(0));
+    let count = frames.clone();
+    let mode = mode.to_owned();
+    eframe::run_native(
+        "Synthetic Cast picker idle probe",
+        eframe::NativeOptions {
+            vsync: false,
+            viewport: egui::ViewportBuilder::default()
+                .with_app_id("rocks.tidalforces.CastIdleProbe")
+                .with_inner_size([1000., 660.]),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            let ctx = cc.egui_ctx.clone();
+            let app = fixture(&ctx, "collection");
+            let mut probe = Probe {
+                app,
+                frames: count,
+                _worker: None,
+            };
+            if mode != "closed" {
+                probe._worker = Some(probe.app.cast_idle_fixture(&ctx, mode == "ready"));
+            }
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(seconds));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            });
+            println!("Synthetic idle probe ready; no account/network/audio services");
+            Ok(Box::new(probe))
+        }),
+    )
+    .map_err(|e| anyhow::anyhow!("Synthetic idle probe failed: {e}"))?;
+    println!("Drawn frames: {}", frames.load(Ordering::Relaxed));
+    Ok(())
+}
+
 struct Capture(App);
 impl eframe::App for Capture {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {

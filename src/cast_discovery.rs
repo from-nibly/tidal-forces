@@ -43,6 +43,19 @@ pub(crate) struct Browser {
     ended: bool,
 }
 impl Browser {
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn fixture() -> (Self, mpsc::SyncSender<()>) {
+        let (done, completion) = mpsc::sync_channel(1);
+        (
+            Self {
+                cancel: Arc::new(AtomicBool::new(false)),
+                mailbox: Arc::new(Mutex::new(None)),
+                done: completion,
+                ended: false,
+            },
+            done,
+        )
+    }
     pub fn next(&mut self) -> Option<Update> {
         if self.ended {
             return None;
@@ -187,8 +200,14 @@ impl Inventory {
     }
 }
 fn publish(mailbox: &Mailbox, update: Update, wake: &impl Fn()) {
-    *mailbox.lock().unwrap_or_else(|e| e.into_inner()) = Some(update);
-    wake();
+    let notify = mailbox
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .replace(update)
+        .is_none();
+    if notify {
+        wake();
+    }
 }
 pub(crate) fn browse(wake: impl Fn() + Send + 'static) -> Result<Browser, &'static str> {
     let mailbox = Arc::new(Mutex::new(None));

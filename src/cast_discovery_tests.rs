@@ -125,6 +125,23 @@ fn controlled_browser() -> (Browser, Mailbox, Arc<AtomicBool>, mpsc::SyncSender<
     )
 }
 #[test]
+fn unread_discovery_bursts_wake_once_without_losing_latest_or_terminal_state() {
+    let (mut browser, mailbox, _, _worker) = controlled_browser();
+    let calls = std::cell::Cell::new(0);
+    let wake = || calls.set(calls.get() + 1);
+    let mut inventory = Inventory::default();
+    for i in 0..100 {
+        inventory.observe(resolved("one", ID, &format!("Name {i}"), 8009));
+        publish(&mailbox, inventory.update(None, false), &wake);
+    }
+    assert_eq!(calls.get(), 1);
+    assert_eq!(browser.next().unwrap().devices[0].name, "Name 99");
+    publish(&mailbox, inventory.update(None, false), &wake);
+    publish(&mailbox, inventory.update(None, true), &wake);
+    assert_eq!(calls.get(), 2);
+    assert!(browser.next().unwrap().finished);
+}
+#[test]
 fn streaming_updates_coalesce_and_terminal_is_delivered_once() {
     let (mut browser, mailbox, _, done) = controlled_browser();
     let mut inventory = Inventory::default();

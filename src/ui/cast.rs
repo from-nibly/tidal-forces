@@ -96,6 +96,26 @@ impl Scope {
     }
 }
 impl App {
+    #[cfg(debug_assertions)]
+    pub(super) fn cast_idle_fixture(
+        &mut self,
+        ctx: &egui::Context,
+        populated: bool,
+    ) -> mpsc::SyncSender<()> {
+        let (browser, worker) = crate::cast_discovery::Browser::fixture();
+        self.cast.discovery = Some(browser);
+        self.cast.picker = Some(ctx.viewport_id());
+        if populated {
+            self.cast.devices = vec![crate::cast_discovery::Device {
+                id: "12345678123412341234123456789abc".into(),
+                name: "Synthetic receiver".into(),
+                model: "Fixture".into(),
+                endpoint: "192.168.99.1:8009".parse().unwrap(),
+            }];
+            self.cast.discovery_stats.found = 1;
+        }
+        worker
+    }
     fn cast_state(&self) -> ConnectionState {
         if self.cast.unknown {
             return ConnectionState::Unconfirmed;
@@ -395,8 +415,11 @@ impl App {
             }
         }
         if self.cast.discovery.is_some() {
-            ui.spinner();
-            ui.label(tr("Looking for Cast devices…"));
+            ui.label(tr(if self.cast.devices.is_empty() {
+                "Looking for Cast devices…"
+            } else {
+                "Devices update automatically while this window is open."
+            }));
         }
         if self.cast.devices.is_empty() && self.cast.discovery_stats.found > 0 {
             ui.label(tr(

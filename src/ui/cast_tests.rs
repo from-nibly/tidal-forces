@@ -31,6 +31,47 @@ fn fixture() -> (
     (app, control, events, requests)
 }
 #[test]
+fn idle_discovery_picker_does_not_request_continuous_repaints() {
+    for populated in [false, true] {
+        let (ctx, mut app, _, _) = super::super::tests::fixture();
+        let (browser, _worker) = crate::cast_discovery::Browser::fixture();
+        app.cast.discovery = Some(browser);
+        app.cast.picker = Some(egui::ViewportId::ROOT);
+        if populated {
+            app.cast.devices = vec![crate::cast_discovery::Device {
+                id: "synthetic".into(),
+                name: "Room".into(),
+                model: "Fixture".into(),
+                endpoint: "192.168.99.1:8009".parse().unwrap(),
+            }];
+        }
+        let mut immediate = 0;
+        for step in 0..30 {
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(step as f64 * 0.1),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 440.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.cast_picker(ctx),
+            );
+            if step >= 20
+                && output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+                    < Duration::from_millis(250)
+            {
+                immediate += 1;
+            }
+        }
+        assert_eq!(
+            immediate, 0,
+            "An idle discovery subscription must not animate/repaint the whole player"
+        );
+    }
+}
+#[test]
 fn icon_states_require_confirmed_session_and_keep_uncertainty_visible() {
     let (mut app, control, _, _) = fixture();
     assert_eq!(app.cast_state(), ConnectionState::Connecting);

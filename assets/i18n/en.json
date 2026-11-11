@@ -1,6 +1,7 @@
 {
   "locale": "en",
   "messages": {
+    "Devices update automatically while this window is open.": "Devices update automatically while this window is open.",
     "Selected": "Selected",
     "Connecting…": "Connecting…",
     "Connected": "Connected",

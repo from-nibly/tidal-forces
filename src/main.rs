@@ -99,6 +99,13 @@ fn main() -> Result<()> {
         return links::Instance::control(command, value);
     }
     #[cfg(debug_assertions)]
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--measure-cast-picker")
+    {
+        return ui::visual_fixture::measure_cast_picker(&args[1..]);
+    }
+    #[cfg(debug_assertions)]
     if args.first().is_some_and(|arg| arg == "--visual-fixture") {
         return ui::visual_fixture::capture(&args[1..]);
     }
