@@ -1,6 +1,9 @@
 {
   "locale": "en",
   "messages": {
+    "Copy TIDAL link": "Copy TIDAL link",
+    "Copy album link": "Copy album link",
+    "Copy artist link": "Copy artist link",
     "Devices update automatically while this window is open.": "Devices update automatically while this window is open.",
     "Selected": "Selected",
     "Connecting…": "Connecting…",

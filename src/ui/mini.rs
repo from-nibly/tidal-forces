@@ -111,6 +111,7 @@ impl App {
                     if icon_button(ui, Icon::Close, tr("Close mini player; keep playback unchanged"), false, 24.).clicked() { self.mini_open = false; ctx.request_repaint_of(egui::ViewportId::ROOT); }
                     let more = icon_button(ui, Icon::More, tr("Mini player options"), false, 24.);
                     egui::Popup::menu(&more).show(|ui| {
+                        if let Some(track)=self.queue.current() {copy_link_menu(ui,Link::Track(track.id));ui.separator();}
                         if ui.button(tr("Now Playing · lyrics")).clicked() { self.dispatch(Action::NowPlaying, &ctx); ui.close(); }
                         let available = !wayland();
                         if ui.add_enabled(available, egui::Checkbox::new(&mut self.appearance.mini_on_top, "Request always on top"))

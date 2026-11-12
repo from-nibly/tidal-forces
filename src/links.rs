@@ -11,6 +11,19 @@ pub enum Link {
 }
 
 impl Link {
+    /// Canonical catalog link, never a signed media URL or authorization handoff.
+    pub fn public_url(&self) -> Option<String> {
+        let (kind, id) = match self {
+            Self::Track(id) if *id > 0 => ("track", id.to_string()),
+            Self::Album(id) if *id > 0 => ("album", id.to_string()),
+            Self::Artist(id) if *id > 0 => ("artist", id.to_string()),
+            Self::Playlist(id) if id.len() <= 200 => ("playlist", id.clone()),
+            Self::Mix(id) if id.len() <= 200 => ("mix", id.clone()),
+            _ => return None,
+        };
+        let url = format!("https://tidal.com/browse/{kind}/{id}");
+        (Self::parse(&url).ok().as_ref() == Some(self)).then_some(url)
+    }
     pub fn parse_tracks(value: &str) -> Result<Vec<u64>> {
         ensure!(
             value.len() <= 4 * 1024 * 1024,
@@ -215,6 +228,38 @@ impl Instance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_catalog_urls_are_canonical_roundtrip_and_reject_missing_or_injected_ids() {
+        for (link, expected) in [
+            (Link::Track(42), "https://tidal.com/browse/track/42"),
+            (Link::Album(12), "https://tidal.com/browse/album/12"),
+            (Link::Artist(34), "https://tidal.com/browse/artist/34"),
+            (
+                Link::Playlist("12345678-1234-1234-1234-123456789abc".into()),
+                "https://tidal.com/browse/playlist/12345678-1234-1234-1234-123456789abc",
+            ),
+            (
+                Link::Mix("mix_ABC-123".into()),
+                "https://tidal.com/browse/mix/mix_ABC-123",
+            ),
+        ] {
+            let url = link.public_url().unwrap();
+            assert_eq!(url, expected);
+            assert_eq!(Link::parse(&url).unwrap(), link);
+            assert!(!url.contains('?') && !url.contains('#') && !url.contains('@'));
+        }
+        for link in [
+            Link::Track(0),
+            Link::Album(0),
+            Link::Artist(0),
+            Link::Playlist("invalid".into()),
+            Link::Playlist("12345678-1234-1234-1234-123456789abc?token=secret".into()),
+            Link::Mix("id#secret".into()),
+            Link::Mix("x".repeat(201)),
+        ] {
+            assert!(link.public_url().is_none());
+        }
+    }
     #[test]
     #[ignore = "Run under dbus-run-session so the test does not contact your real player"]
     fn single_instance_forwards_links_and_activation() {

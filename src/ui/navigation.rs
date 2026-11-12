@@ -22,6 +22,21 @@ pub(crate) enum Page {
 }
 
 impl Page {
+    pub fn public_link(&self) -> Option<crate::links::Link> {
+        use crate::links::Link;
+        match self {
+            Self::Track(id) => Some(Link::Track(*id)),
+            Self::Artist(id) => Some(Link::Artist(*id)),
+            Self::Mix { id, .. } => Some(Link::Mix(id.clone())),
+            Self::Collection { kind, id, .. } if kind == "albums" => {
+                id.parse().ok().map(Link::Album)
+            }
+            Self::Collection { kind, id, .. } if kind == "playlists" => {
+                Some(Link::Playlist(id.clone()))
+            }
+            _ => None,
+        }
+    }
     pub fn is_library(&self) -> bool {
         matches!(self, Self::Library(_) | Self::Playlists)
     }

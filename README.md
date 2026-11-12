@@ -251,6 +251,9 @@ still future work.
 
 **Copy links** (or Ctrl+C with table focus) copies public TIDAL track URLs in source
 order, preserving duplicates. Text fields retain their own clipboard shortcuts.
+Version 0.34.2 adds [direct Copy TIDAL link shortcuts](docs/sharing.md) to
+track/player menus, Now Playing and collection headers, alongside the bulk
+selection action.
 **Selection actions** adds the batch to Up next or prepends it with Play next while
 preserving its order. The entire batch is validated before changing the queue;
 invalid IDs, capacity or occurrence exhaustion cannot leave a partial addition.

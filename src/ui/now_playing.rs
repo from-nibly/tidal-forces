@@ -210,6 +210,7 @@ impl App {
                     ui.add(egui::Label::new(RichText::new(&track.title).size(22.).strong()).truncate()).on_hover_text(&track.title);
                     if ui.add(egui::Label::new(RichText::new(&track.artist.name).color(theme_accent())).truncate().sense(egui::Sense::click())).on_hover_text(tr("Open artist")).clicked() { artist = Some(track.artist.id); }
                     if ui.add(egui::Label::new(RichText::new(&track.album.title).color(theme_muted())).truncate().sense(egui::Sense::click())).on_hover_text(tr("Open album")).clicked() { album = Some((track.album.id, track.album.title.clone())); }
+                    copy_link_button(ui,Link::Track(track.id),tr("Copy TIDAL link"));
                 });
                 ui.add_space(16.);
                 ui.allocate_ui_with_layout(vec2((width - left - 24.).max(120.), height), egui::Layout::top_down(egui::Align::Min), |ui| self.lyrics_panel(ui));

@@ -120,6 +120,8 @@ impl App {
         parent: &str,
     ) {
         folder_popup(response).show(|ui| {
+            copy_link_menu(ui, Link::Playlist(playlist.uuid.clone()));
+            ui.separator();
             if ui
                 .add_enabled(
                     self.can_edit_folders(),

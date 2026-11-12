@@ -155,6 +155,8 @@ impl App {
                         });
                     }
                     let menu = ui.menu_button("⋯", |ui| {
+                        copy_link_menu(ui, Link::Playlist(pin.id.clone()));
+                        ui.separator();
                         if ui
                             .add_enabled(index > 0, egui::Button::new(tr("Move pin up")))
                             .clicked()

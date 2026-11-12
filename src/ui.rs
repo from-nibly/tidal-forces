@@ -51,6 +51,8 @@ mod classic;
 mod settings;
 use library::favorite_button;
 #[cfg(test)]
+mod copy_link_tests;
+#[cfg(test)]
 mod player_bar_tests;
 mod selection;
 mod surfaces;
@@ -2525,6 +2527,7 @@ impl App {
                     if surfaces::action_button(ui,Icon::Play,if self.track_view.active() {"Play shown"} else {"Play"},true).on_hover_text(tr("Play the current view · Filtering/sorting uses loaded songs only · Manual Up next is preserved")).clicked() { self.play_collection(false); }
                     if surfaces::action_button(ui,Icon::Shuffle,if self.track_view.active() {"Shuffle shown"} else {"Shuffle"},false).on_hover_text(tr("Shuffle the current view · Filtering/sorting uses loaded songs only · Manual Up next stays ordered.")).clicked() { self.play_collection(true); }
                 });
+                if let Some(link)=self.page.public_link() {copy_link_button(ui,link,tr("Copy TIDAL link"));}
                 ui.label(RichText::new(format!("Tracks · {} loaded", self.tracks.len())).size(12.).color(theme_muted()));
                 self.track_loading_controls(ui);
                 if self.playlist_page.as_ref().is_some_and(|page|page.editable) && ui.add_enabled(self.can_paste_tracks(),egui::Button::new(tr("Paste tracks…"))).on_hover_text(tr("Paste copied TIDAL track links · Ctrl+V · Confirmation required. Available for loaded, owned playlists without videos.")).clicked() {self.request_track_paste(ui.ctx());}
@@ -2547,6 +2550,9 @@ impl App {
         }
         if self.page == Page::Home {
             self.history_shelf(ui);
+        }
+        if !collection && let Some(link) = self.page.public_link() {
+            copy_link_button(ui, link, tr("Copy TIDAL link"));
         }
         let header_item = match &self.page {
             Page::Artist(id) => Some(Favorite::new(FavoriteKind::Artists, *id)),
@@ -2627,14 +2633,14 @@ impl App {
                     100.,
                     |ui, artist, width| {
                         surfaces::card(ui, width, |ui| {
-                            if rounded_artwork(
+                            let cover = rounded_artwork(
                                 ui,
                                 cover_url(artist.picture.as_deref(), 320),
                                 width - 26.,
                                 ((width - 26.) / 2.) as u8,
-                            )
-                            .clicked()
-                            {
+                            );
+                            cover.context_menu(|ui| copy_link_menu(ui, Link::Artist(artist.id)));
+                            if cover.clicked() {
                                 selected_artist = Some(artist.id);
                             }
                             if ui
@@ -2683,9 +2689,10 @@ impl App {
                     92.,
                     |ui, album, width| {
                         surfaces::card(ui, width, |ui| {
-                            if artwork(ui, cover_url(album.cover.as_deref(), 320), width - 26.)
-                                .clicked()
-                            {
+                            let cover =
+                                artwork(ui, cover_url(album.cover.as_deref(), 320), width - 26.);
+                            cover.context_menu(|ui| copy_link_menu(ui, Link::Album(album.id)));
+                            if cover.clicked() {
                                 selected = Some(album.clone());
                             }
                             if ui
@@ -3408,7 +3415,34 @@ fn playlist_button(ui: &mut egui::Ui, playlist: &Playlist, active: bool) -> egui
     response
 }
 
+fn copy_link_button(ui: &mut egui::Ui, link: Link, label: &str) -> egui::Response {
+    let url = link.public_url();
+    let response = ui.add_enabled(url.is_some(), egui::Button::new(label));
+    if response.clicked()
+        && let Some(url) = url
+    {
+        ui.ctx().copy_text(url);
+    }
+    response
+}
+fn copy_link_menu(ui: &mut egui::Ui, link: Link) {
+    if copy_link_button(ui, link, tr("Copy TIDAL link")).clicked() {
+        ui.close();
+    }
+}
 fn track_menu(ui: &mut egui::Ui, track: &Track, radio: &mut Option<TrackAction>) {
+    copy_link_menu(ui, Link::Track(track.id));
+    if track.album.id != 0
+        && copy_link_button(ui, Link::Album(track.album.id), tr("Copy album link")).clicked()
+    {
+        ui.close();
+    }
+    if track.artist.id != 0
+        && copy_link_button(ui, Link::Artist(track.artist.id), tr("Copy artist link")).clicked()
+    {
+        ui.close();
+    }
+    ui.separator();
     if ui.button(tr("Play next")).clicked() {
         *radio = Some(TrackAction::Queue(track.clone(), true));
         ui.close();
