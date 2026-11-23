@@ -103,7 +103,7 @@
     "Compatibility sign-in is AAC-only. Use General to authorize lossless playback.": "Compatibility sign-in is AAC-only. Use General to authorize lossless playback.",
     "Confirm clear history": "Confirm clear history",
     "Confirm keyring migration": "Confirm keyring migration",
-    "Confirmed unavailable for this account. Play retries; markers clear when the account session changes.": "Confirmed unavailable for this account. Play retries; markers clear when the account session changes.",
+    "Unavailable or not ready for playback. Play retries; markers clear when the account session changes.": "Unavailable or not ready for playback. Play retries; markers clear when the account session changes.",
     "Connect lossless playback": "Connect lossless playback",
     "Connect with TIDAL": "Connect with TIDAL",
     "Continue with TIDAL track recommendations": "Continue with TIDAL track recommendations",

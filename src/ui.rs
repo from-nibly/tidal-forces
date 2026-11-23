@@ -43,6 +43,8 @@ mod playlist_drag;
 mod playlist_load;
 mod playlist_metadata;
 mod radio;
+#[cfg(test)]
+mod readiness_tests;
 mod reorder;
 mod side_panel;
 use playback::RestoreGuard;
@@ -698,7 +700,6 @@ impl App {
                         | Event::Position { .. }
                         | Event::Ended(_)
                         | Event::PlaybackError { .. }
-                        | Event::TrackUnavailable { .. }
                         | Event::TrackAvailable { .. }
                         | Event::OutputLost { .. }
                         | Event::OutputDetails(_)
@@ -1246,7 +1247,8 @@ impl App {
                     user,
                     generation,
                     id,
-                } => self.track_unavailable(user, generation, id),
+                    reason,
+                } => self.track_unavailable(user, generation, id, reason),
                 Event::TrackAvailable {
                     user,
                     generation,

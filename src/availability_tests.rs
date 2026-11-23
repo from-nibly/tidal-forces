@@ -19,7 +19,7 @@ async fn only_confirmed_missing_catalog_tracks_are_unavailable() {
     }
 }
 #[tokio::test]
-async fn authorization_asset_readiness_and_transient_errors_are_never_skipped() {
+async fn only_playback_401_readiness_is_skippable_not_other_authorization_or_transient_errors() {
     for status in [401, 403, 429, 500, 503] {
         let mut playback = step(
             "GET",
@@ -29,6 +29,27 @@ async fn authorization_asset_readiness_and_transient_errors_are_never_skipped() 
         playback.status = status;
         let (mut api, server) = mock(vec![playback]);
         let error = api.stream(9, "LOSSLESS").await.err().unwrap();
+        assert_eq!(
+            error.downcast_ref::<TrackUnavailable>().copied(),
+            (status == 401).then_some(TrackUnavailable::NotReady)
+        );
+        server.join().unwrap();
+    }
+}
+#[tokio::test]
+async fn unrelated_401_errors_never_become_readiness_skips_or_contact_real_auth() {
+    for (path, code) in [
+        ("/v1/tracks/9", 4005),
+        ("/v1/tracks/9/playbackinfopostpaywall", 11003),
+    ] {
+        let mut rejected = step("GET", path, json!({"status":401,"subStatus":code}));
+        rejected.status = 401;
+        let (mut api, server) = mock(vec![rejected]);
+        api.prohibit_refresh = true;
+        let error = api
+            .get(path.strip_prefix("/v1/").unwrap(), &[])
+            .await
+            .unwrap_err();
         assert!(error.downcast_ref::<TrackUnavailable>().is_none());
         server.join().unwrap();
     }

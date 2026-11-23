@@ -1,6 +1,6 @@
 # Tidal Forces: capability-led feature and UI plan
 
-**Status: P1–P7 have shipped; v0.34.1 is installed.** P7 Google Cast v0.34.0 includes native streaming discovery, main/mini/classic [player controls](cast-player-controls.md), metadata and shared queue/transport routing with acknowledged local release and honest capability limits. Private verification and scoped receiver codec/seek/natural-completion evidence are documented in [native validation](cast-native-validation.md); discovery passes after the separately authorized narrow host firewall fix. The operator subsequently confirmed live artwork and queue playback; that does not establish universal device/codec coverage or erase the original release-time limits. The idle-picker CPU fix shipped in v0.34.1. Direct [Copy TIDAL link shortcuts](sharing.md) in v0.34.2 have passed native review and are approved for publication and managed installation. The decoder/manifest mismatch investigation remains paused pending an affected track. MilkDrop/projectM, native platform ports and broader gated compatibility work remain optional; genuine TIDAL Connect remains separate and unestablished. Approval does not authorize new audible/device/account-mutation tests.
+**Status: P1–P7 have shipped; v0.34.2 is installed and v0.34.3 is approved for publication and managed installation.** P7 Google Cast v0.34.0 includes native streaming discovery, main/mini/classic [player controls](cast-player-controls.md), metadata and shared queue/transport routing with acknowledged local release and honest capability limits. Private verification and scoped receiver codec/seek/natural-completion evidence are documented in [native validation](cast-native-validation.md); discovery passes after the separately authorized narrow host firewall fix. The operator subsequently confirmed live artwork and queue playback; that does not establish universal device/codec coverage or erase the original release-time limits. The idle-picker CPU fix shipped in v0.34.1. Direct [Copy TIDAL link shortcuts](sharing.md) in v0.34.2 have passed native review and are approved for publication and managed installation. The decoder/manifest mismatch investigation remains paused pending an affected track. MilkDrop/projectM, native platform ports and broader gated compatibility work remain optional; genuine TIDAL Connect remains separate and unestablished. Approval does not authorize new audible/device/account-mutation tests.
 
 The operator requested one version for the entire remaining P4 scope, not more
 incremental releases. The bundle includes output selection/preferences and route-loss
@@ -1097,6 +1097,20 @@ never add an always-on processing stage to an otherwise bypassed path by acciden
   Genuine stream failures still require explicit retry.
 - Local EQ/normalization do not affect genuine Connect remote playback. Reflect
   this in settings and disable the local PCM visualizer for remote playback.
+
+### Approved v0.34.3 — bounded playback-readiness skipping
+
+The operator requested automatic skipping for playback HTTP 401/substatus 4005.
+The approved implementation carries a typed readiness reason through local and
+Cast preparation paths into the existing account/generation/occurrence-fenced queue
+policy. Missing and not-ready failures share a five-consecutive-failure ceiling;
+genuine playback or an explicit retry resets it. Other authorization, subscription,
+network and decoder failures still do not auto-skip. No credential renewal, same-asset
+retry or quality fallback is introduced. Cast skips only after acknowledged release
+and before LOAD, never from an active or ambiguously released receiver. Offline
+regressions pass; native review and version approval are complete. See
+[playback readiness](playback-readiness.md). This narrow 4005 exception supersedes
+the original blanket authorization-error exclusion below, not its other guards.
 
 ### P4 playback reliability — unavailable catalog tracks (v0.31)
 

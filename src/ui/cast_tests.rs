@@ -31,6 +31,121 @@ fn fixture() -> (
     (app, control, events, requests)
 }
 #[test]
+fn cast_readiness_skips_only_failed_preparation_and_stops_after_five() {
+    let (mut app, _control, events, mut requests) = fixture();
+    app.cast.worker = None;
+    app.queue_mut()
+        .start(
+            (1..=10).map(super::super::tests::track).collect(),
+            0,
+            "Synthetic".into(),
+            None,
+        )
+        .unwrap();
+    app.cast.preparing = Some(Scope {
+        user: 7,
+        generation: app.play_generation,
+        occurrence: app.queue.current_entry().unwrap().occurrence,
+    });
+    for id in 1..=5 {
+        let old_generation = app.play_generation;
+        events
+            .send(crate::backend::Event::TrackUnavailable {
+                user: 7,
+                generation: old_generation,
+                id,
+                reason: crate::api::TrackUnavailable::NotReady,
+            })
+            .unwrap();
+        app.events();
+        assert_eq!(app.unavailable_skips, id as u8);
+        assert!(app.cast.worker.is_none());
+        if id < 5 {
+            assert_eq!(app.queue.current().unwrap().id, id + 1);
+            let quiet = app
+                .cast
+                .quiet
+                .as_mut()
+                .expect("skip must still wait for acknowledged local release");
+            let (tx, rx) = mpsc::channel();
+            tx.send(true).unwrap();
+            quiet.reply = rx;
+            app.cast_tick();
+            assert!(
+                matches!(requests.try_recv(),Ok(Request::CastPrepare {id:next,..}) if next==id+1)
+            );
+            assert!(app.cast.preparing.is_some());
+            events
+                .send(crate::backend::Event::TrackUnavailable {
+                    user: 7,
+                    generation: old_generation,
+                    id,
+                    reason: crate::api::TrackUnavailable::NotReady,
+                })
+                .unwrap();
+            app.events();
+            assert_eq!(app.queue.current().unwrap().id, id + 1);
+        }
+        assert!(requests.try_recv().is_err());
+    }
+    assert!(
+        app.paused && !app.buffering && app.cast.preparing.is_none() && app.cast.quiet.is_none()
+    );
+    app.toggle();
+    assert_eq!(app.unavailable_skips, 0);
+    assert!(app.cast.quiet.is_some() && requests.try_recv().is_err());
+}
+#[test]
+fn readiness_events_cannot_replace_active_or_unconfirmed_remote_sessions() {
+    for unconfirmed in [false, true] {
+        let (mut app, _control, events, mut requests) = fixture();
+        if unconfirmed {
+            app.cast.worker = None;
+            app.cast.unknown = true;
+            app.cast.preparing = Some(Scope {
+                user: 7,
+                generation: app.play_generation,
+                occurrence: app.queue.current_entry().unwrap().occurrence,
+            });
+        }
+        let occurrence = app.queue.current_entry().unwrap().occurrence;
+        events
+            .send(crate::backend::Event::TrackUnavailable {
+                user: 7,
+                generation: app.play_generation,
+                id: 1,
+                reason: crate::api::TrackUnavailable::NotReady,
+            })
+            .unwrap();
+        app.events();
+        assert_eq!(app.queue.current_entry().unwrap().occurrence, occurrence);
+        assert_eq!(app.unavailable_skips, 0);
+        assert!(requests.try_recv().is_err());
+    }
+}
+#[test]
+fn only_confirmed_playing_snapshot_resets_remote_readiness_failure_streak() {
+    let (mut app, control, _, _) = fixture();
+    app.unavailable_skips = 4;
+    app.unavailable.insert(1);
+    for state in [State::Buffering, State::Paused, State::Playing] {
+        control
+            .emit(CastEvent::Snapshot(Snapshot {
+                state,
+                position: Duration::ZERO,
+                seek_serial: 0,
+                observed: Instant::now(),
+            }))
+            .unwrap();
+        app.events();
+        assert_eq!(
+            app.unavailable_skips,
+            if state == State::Playing { 0 } else { 4 }
+        );
+    }
+    assert!(!app.unavailable.contains(&1));
+}
+#[test]
 fn idle_discovery_picker_does_not_request_continuous_repaints() {
     for populated in [false, true] {
         let (ctx, mut app, _, _) = super::super::tests::fixture();

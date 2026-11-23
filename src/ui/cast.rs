@@ -672,6 +672,17 @@ impl App {
                 artwork: track.cover_url(640),
             })
     }
+    pub(super) fn cast_reject_preparation(&mut self) -> bool {
+        // A skip must not replace an active or ambiguously released receiver.
+        if self.cast.unknown
+            || self.cast.worker.is_some()
+            || !self.cast.preparing.is_some_and(|scope| scope.matches(self))
+        {
+            return false;
+        }
+        self.cast.preparing = None;
+        true
+    }
     pub(super) fn cast_prepared(
         &mut self,
         user: u64,
@@ -826,6 +837,12 @@ impl App {
                 CastEvent::Snapshot(snapshot)
                     if scope.matches(self) && snapshot.seek_serial == self.cast.seek_serial =>
                 {
+                    if snapshot.state == State::Playing {
+                        self.unavailable_skips = 0;
+                        if let Some(track) = self.queue.current() {
+                            self.unavailable.remove(&track.id);
+                        }
+                    }
                     let now = snapshot.observed;
                     if let Some((previous, time)) = self.cast.previous {
                         let elapsed = now.saturating_duration_since(time);

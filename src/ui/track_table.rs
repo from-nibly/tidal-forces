@@ -573,7 +573,7 @@ impl App {
                 .selectable(false),
             );
             if unavailable {
-                title_response.on_hover_text(tr("Confirmed unavailable for this account. Play retries; markers clear when the account session changes."));
+                title_response.on_hover_text(tr("Unavailable or not ready for playback. Play retries; markers clear when the account session changes."));
             }
             title.add(
                 egui::Label::new(

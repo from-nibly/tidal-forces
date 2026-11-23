@@ -306,11 +306,12 @@ impl Api {
             })?;
             if r.status() == StatusCode::UNAUTHORIZED {
                 let value = rejection_value(&mut r).await;
-                // Asset readiness is not a token failure. Do not renew credentials
-                // or retry the same unavailable asset in response to this code.
-                if (phase == "playback authorization" && value["subStatus"].as_u64() == Some(4005))
-                    || attempt > 0
-                {
+                // This specific readiness rejection may skip an occurrence, but
+                // must never renew credentials or retry the same asset.
+                if phase == "playback authorization" && value["subStatus"].as_u64() == Some(4005) {
+                    return Err(TrackUnavailable::NotReady.into());
+                }
+                if attempt > 0 {
                     bail!(rejection_message(StatusCode::UNAUTHORIZED, phase, &value));
                 }
                 self.refresh().await?;
@@ -1437,7 +1438,7 @@ impl Api {
                             .downcast_ref::<RequestNotFound>()
                             .is_some_and(|e| e.path == catalog)
                     {
-                        return Err(TrackUnavailable.into());
+                        return Err(TrackUnavailable::Missing.into());
                     }
                 }
                 return Err(error);
@@ -1449,11 +1450,17 @@ impl Api {
     }
 }
 
-#[derive(Debug)]
-pub struct TrackUnavailable;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackUnavailable {
+    Missing,
+    NotReady,
+}
 impl std::fmt::Display for TrackUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("This track is unavailable for this account.")
+        f.write_str(match self {
+            Self::Missing => "This track is unavailable for this account.",
+            Self::NotReady => "TIDAL says this song is not ready for playback (code 4005).",
+        })
     }
 }
 impl std::error::Error for TrackUnavailable {}
@@ -1689,7 +1696,7 @@ fn rejection_message(status: StatusCode, phase: &str, value: &Value) -> String {
         && phase == "playback authorization"
         && value["subStatus"].as_u64() == Some(4005)
     {
-        return "TIDAL says this song is not ready for playback (code 4005). Try another song. If many songs fail, this app's playback access may be restricted.".into();
+        return TrackUnavailable::NotReady.to_string();
     }
     // Never echo server descriptions, URLs, tokens or unrecognized error strings.
     let code = value["error"].as_str().filter(|code| {

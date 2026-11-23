@@ -264,6 +264,7 @@ fn stale_unavailability_cannot_cancel_a_valid_prepared_successor() {
             user: 7,
             generation: 99,
             id: 1,
+            reason: crate::api::TrackUnavailable::Missing,
         })
         .unwrap();
     app.events();

@@ -209,11 +209,11 @@ impl App {
     }
 
     pub(super) fn toggle(&mut self) {
+        self.unavailable_skips = 0;
         if self.cast.enabled {
             self.cast_toggle();
             return;
         }
-        self.unavailable_skips = 0;
         if self.paused
             && let Some(epoch) = self.output_fault.take()
         {
@@ -256,7 +256,13 @@ impl App {
         self.unavailable_skips = 0;
         self.advance(false);
     }
-    pub(super) fn track_unavailable(&mut self, user: u64, generation: u64, id: u64) {
+    pub(super) fn track_unavailable(
+        &mut self,
+        user: u64,
+        generation: u64,
+        id: u64,
+        reason: crate::api::TrackUnavailable,
+    ) {
         self.sync_next(false);
         if self.account != Some(user)
             || self.play_generation != generation
@@ -266,6 +272,9 @@ impl App {
         }
         self.sync_next(true);
         if self.play_generation != generation {
+            return;
+        }
+        if self.cast.enabled && !self.cast_reject_preparation() {
             return;
         }
         if self.unavailable.len() >= 512 {
@@ -284,15 +293,21 @@ impl App {
             self.paused = true;
             self.ended = false;
             self.waiting_context = false;
-            self.error = Some(if self.unavailable_skips >= 5 { "Stopped after five unavailable tracks. Choose another track or explicitly retry." } else { "This track is unavailable for this account. Playback remains paused." }.into());
+            self.error = Some(if self.unavailable_skips >= 5 {
+                format!(
+                    "Stopped after five consecutive unavailable or not-ready tracks. {reason} Choose another track or explicitly retry."
+                )
+            } else {
+                format!("{reason} Playback remains paused.")
+            });
             return;
         }
         self.advance(false);
         if self.paused && self.ended {
-            self.error = Some("This track is unavailable and no further tracks are queued.".into());
+            self.error = Some(format!("{reason} No further tracks are queued."));
         } else {
             self.notice = Some(format!(
-                "Skipped an unavailable track ({} of 5 consecutive attempts).",
+                "Skipped: {reason} ({} of 5 consecutive failures).",
                 self.unavailable_skips
             ));
         }

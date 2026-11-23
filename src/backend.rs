@@ -219,6 +219,7 @@ pub enum Event {
         user: u64,
         generation: u64,
         id: u64,
+        reason: crate::api::TrackUnavailable,
     },
     TrackAvailable {
         user: u64,
@@ -493,7 +494,7 @@ impl Backend {
                                     Request::CastPrepare {user,generation,id,quality,position,autoplay} => {
                                         let prepared: anyhow::Result<_> = async {
                                             anyhow::ensure!(audio.current(generation) && api.session.as_ref().is_some_and(|s|s.user_id==user), "Cast playback context changed");
-                                            let stream=api.stream(id,&quality).await.map_err(|_|anyhow::anyhow!("Could not authorize this TIDAL stream for Cast"))?;
+                                            let stream=api.stream(id,&quality).await.map_err(|error| if error.is::<crate::api::TrackUnavailable>() {error} else {anyhow::anyhow!("Could not authorize this TIDAL stream for Cast")})?;
                                             anyhow::ensure!(audio.current(generation) && api.session.as_ref().is_some_and(|s|s.user_id==user), "Cast playback context changed");
                                             anyhow::ensure!(stream.quality==quality,"Returned quality differs from requested quality; no downgrade");
                                             let crate::api::StreamSource::Dash(manifest)=stream.source else { anyhow::bail!("This stream is not a reviewed clear DASH source; no fallback"); };
@@ -501,7 +502,11 @@ impl Backend {
                                             let description=format!("Cast · manifest {} / {} Hz · receiver output unknown · local DSP bypassed",manifest.codec.label(),manifest.sample_rate);
                                             Ok((crate::cast_control::Media {metadata:Default::default(),xml:document.xml,duration:document.duration,position:position.min(document.duration.saturating_sub(Duration::from_secs(1))),autoplay},description))
                                         }.await;
-                                        events.send(Event::CastPrepared {user,generation,result:prepared.map_err(|e|e.to_string())});
+                                        if let Err(error)=&prepared && let Some(event)=track_unavailable_event(error,Some(user),generation,id) {
+                                            events.send(event);
+                                        } else {
+                                            events.send(Event::CastPrepared {user,generation,result:prepared.map_err(|e|e.to_string())});
+                                        }
                                     }
                                     Request::Recommendations { user, serial, id, mut cancel } => {
                                         if !matches!(cancel.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) { return Ok(()); }
@@ -703,11 +708,13 @@ impl Backend {
                                         let user = api.session.as_ref().map(|s| s.user_id);
                                         let stream = match api.stream(id, &quality).await {
                                             Ok(stream) => stream,
-                                            Err(error) if error.downcast_ref::<crate::api::TrackUnavailable>().is_some() => {
-                                                if let Some(user) = user { events.send(Event::TrackUnavailable { user, generation, id }); }
-                                                return Ok(());
+                                            Err(error) => {
+                                                if let Some(event)=track_unavailable_event(&error,user,generation,id) {
+                                                    events.send(event);
+                                                    return Ok(());
+                                                }
+                                                return Err(error);
                                             }
-                                            Err(error) => return Err(error),
                                         };
                                         if let Some(user) = user { events.send(Event::TrackAvailable { user, generation, id }); }
                                         let audio = audio.clone();
@@ -764,6 +771,20 @@ impl Backend {
     }
 }
 
+fn track_unavailable_event(
+    error: &anyhow::Error,
+    user: Option<u64>,
+    generation: u64,
+    id: u64,
+) -> Option<Event> {
+    Some(Event::TrackUnavailable {
+        user: user?,
+        generation,
+        id,
+        reason: *error.downcast_ref::<crate::api::TrackUnavailable>()?,
+    })
+}
+
 fn credential_event(api: &Api, events: &Events, finished: bool) {
     events.send(Event::Credentials {
         status: api.credentials.status().map_err(|error| error.to_string()),
@@ -793,6 +814,20 @@ fn login_url(value: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn availability_dispatch_requires_typed_error_and_account_and_preserves_scope() {
+        for reason in [
+            crate::api::TrackUnavailable::Missing,
+            crate::api::TrackUnavailable::NotReady,
+        ] {
+            let error = anyhow::Error::from(reason).context("stream");
+            assert!(
+                matches!(track_unavailable_event(&error,Some(7),42,9),Some(Event::TrackUnavailable {user:7,generation:42,id:9,reason:r}) if r==reason)
+            );
+            assert!(track_unavailable_event(&error, None, 42, 9).is_none());
+        }
+        assert!(track_unavailable_event(&anyhow::anyhow!("code 4005"), Some(7), 42, 9).is_none());
+    }
     #[tokio::test]
     async fn buffered_seek_dispatch_does_not_wait_for_the_catalog_queue() {
         let player = Player::inert();
